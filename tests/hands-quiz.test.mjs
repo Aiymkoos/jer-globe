@@ -126,7 +126,7 @@ test('взмах ладонью меняет режим, по диагонали
 
 test('в режиме с морем ладонь вверх поднимает уровень', () => {
   const e = new GlobeHands('drag');
-  const r = run(e, [...seq(20, () => ({ Right: h(POSE.PALM, 0.5, 0.7), Left: none })), ...seq(8, i => ({ Right: h(POSE.PALM, 0.5, 0.7 - i * 0.03), Left: none }))], { levelMode: true });
+  const r = run(e, [...seq(20, () => ({ Right: h(POSE.PALM, 0.5, 0.7), Left: none })), ...seq(12, i => ({ Right: h(POSE.PALM, 0.5, 0.7 - i * 0.03), Left: none }))], { levelMode: true });
   const dv = r.actions.filter(a => a.type === 'level').reduce((s, a) => s + a.dv, 0);
   assert.ok(dv > 40, String(dv));
   assert.equal(r.actions.filter(a => a.type === 'swipe').length, 0);
@@ -392,4 +392,27 @@ test('широко развёл пальцы (рука похожа на лад�
   const dz = r.actions.filter(a => a.type === 'zoom').reduce((s, a) => s + a.dz, 0);
   assert.ok(dz > 2, String(dz));
   assert.equal(r.actions.filter(a => a.type === 'swipe').length, 0);
+});
+
+test('в режиме с морем взмах в сторону меняет режим, а не уровень воды', () => {
+  const e = new GlobeHands('drag');
+  // взмах вправо, в начале рука чуть уходит вверх
+  const r = run(e, [
+    ...seq(20, () => ({ Right: h(POSE.PALM, 0.4, 0.5), Left: none })),
+    ...seq(10, i => ({ Right: h(POSE.PALM, 0.4 + i * 0.03, 0.5 - (i < 2 ? i * 0.012 : 0.024)), Left: none })),
+  ], { levelMode: true });
+  assert.deepEqual(r.actions.filter(a => a.type === 'swipe'), [{ type: 'swipe', dir: 1 }]);
+  assert.equal(r.actions.filter(a => a.type === 'level').length, 0);
+});
+
+test('после изменения уровня можно замереть и взмахнуть в сторону', () => {
+  const e = new GlobeHands('drag');
+  const r = run(e, [
+    ...seq(20, () => ({ Right: h(POSE.PALM, 0.4, 0.7), Left: none })),
+    ...seq(8, i => ({ Right: h(POSE.PALM, 0.4, 0.7 - i * 0.03), Left: none })),
+    ...seq(20, () => ({ Right: h(POSE.PALM, 0.4, 0.49), Left: none })),
+    ...seq(10, i => ({ Right: h(POSE.PALM, 0.4 + i * 0.03, 0.49), Left: none })),
+  ], { levelMode: true });
+  assert.ok(r.actions.some(a => a.type === 'level'));
+  assert.equal(r.actions.filter(a => a.type === 'swipe').length, 1);
 });

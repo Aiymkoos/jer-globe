@@ -15,7 +15,9 @@ export const T = {
   SWIPE_MAX_MS: 750,
   SWIPE_MIN_MS: 90,
   SWIPE_COOLDOWN: 1200,
-  SWIPE_ARM_MS: 300,  // ладонь должна продержаться столько, прежде чем взмах засчитается
+  SWIPE_ARM_MS: 300,
+  AXIS_LOCK: 0.04,    // сдвиг ладони, после которого решаем: взмах в сторону или уровень моря
+  LEVEL_IDLE_MS: 500, // ладонь замерла столько — жест «уровень моря» закончен  // ладонь должна продержаться столько, прежде чем взмах засчитается
   SWIPE_SETTLE_MS: 600, // рука только появилась или ушла вторая — взмахи не считаем
   ZOOM_DEAD: 0.03,    // двуручный масштаб: изменение расстояния меньше (log2) — дрожание
   SPREAD_IDLE_MS: 700, // масштаб пальцами: ладонь/указатель без движения столько — масштаб отпущен
@@ -274,13 +276,27 @@ export class GlobeHands {
   // Ладонь: горизонтальный взмах — режим; в режимах с морем — вверх/вниз уровень.
   palmGesture(h, now, ctx, out, act, key) {
     if (now < this.cooldown) return;
-    if (!this.swipe || this.swipe.key !== key || now - this.swipe.t > T.SWIPE_MAX_MS) this.swipe = { key, x: h.palm.x, y: h.palm.y, t: now, ly: h.palm.y };
-    const dx = h.palm.x - this.swipe.x, dy = h.palm.y - this.swipe.y, age = now - this.swipe.t;
-    if (ctx.levelMode && Math.abs(dy) > Math.abs(dx)) {
-      const dv = -(h.palm.y - this.swipe.ly) * T.LEVEL_GAIN;
-      this.swipe.ly = h.palm.y;
+    const sw = this.swipe;
+    const expired = sw && (sw.axis === 'v' ? now - sw.moved > T.LEVEL_IDLE_MS : now - sw.t > T.SWIPE_MAX_MS);
+    if (!sw || sw.key !== key || expired) this.swipe = { key, x: h.palm.x, y: h.palm.y, t: now, ly: h.palm.y, moved: now, axis: null };
+    const g = this.swipe;
+    const dx = h.palm.x - g.x, dy = h.palm.y - g.y, age = now - g.t;
+    // Направление решаем, только когда рука заметно сдвинулась, и держим до конца жеста:
+    // иначе горизонтальный взмах, чуть ушедший вверх в начале, менял уровень моря.
+    if (!g.axis) {
+      if (Math.hypot(dx, dy) < T.AXIS_LOCK) {
+        out.hint ??= ctx.levelMode ? 'Ладонь: вверх-вниз — уровень моря, взмах в сторону — другой режим' : 'Ладонь — взмах вправо или влево: сменить режим';
+        return;
+      }
+      g.axis = ctx.levelMode && Math.abs(dy) > Math.abs(dx) * 1.3 ? 'v' : 'h';
+      g.ly = h.palm.y;
+    }
+    if (g.axis === 'v') {
+      const dv = -(h.palm.y - g.ly) * T.LEVEL_GAIN;
+      if (Math.abs(h.palm.y - g.ly) > 0.002) g.moved = now;
+      g.ly = h.palm.y;
       if (dv) act({ type: 'level', dv });
-      out.hint ??= 'Ладонь вверх — море поднимается, вниз — опускается';
+      out.hint ??= 'Ладонь вверх — море поднимается, вниз — опускается. Замри — и можно взмахнуть в сторону';
       return;
     }
     if (Math.abs(dx) >= T.SWIPE_DX && age >= T.SWIPE_MIN_MS) {
