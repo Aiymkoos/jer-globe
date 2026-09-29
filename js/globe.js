@@ -1,3 +1,5 @@
+import { floodRamp, iceRamp } from './terrain.js';
+export { floodRamp, iceRamp } from './terrain.js';
 // 3D-глобус на MapLibre: спутник, Земля без воды, потоп, ледниковый период,
 // ночные огни, землетрясения и МКС. Все источники бесплатные и без ключей.
 
@@ -31,15 +33,6 @@ const DRAINED_RAMP = [
 ];
 
 // «Потоп»: всё, что ниже уровня моря L, заливается водой.
-export function floodRamp(L) {
-  return ['interpolate', ['linear'], ['elevation'], L - 1, 'rgba(38,112,196,0.78)', L, 'rgba(38,112,196,0)', L + 1, 'rgba(0,0,0,0)'];
-}
-
-// «Ледниковый период»: дно между L и 0 становится сушей.
-export function iceRamp(L) {
-  return ['interpolate', ['linear'], ['elevation'],
-    L - 1, 'rgba(0,0,0,0)', L, 'rgba(222,196,140,0.92)', -1, 'rgba(222,196,140,0.92)', 0, 'rgba(0,0,0,0)'];
-}
 
 function style(countries) {
   return {
@@ -116,7 +109,9 @@ function styleFor(countries, id, level) {
 }
 
 export async function createGlobe(container, { mode = 'satellite', level, center = [68.7, 48], zoom = 1.7 } = {}) {
-  const countries = await (await fetch(new URL('../data/countries.json', import.meta.url))).json();
+  const response = await fetch(new URL('../data/countries.json', import.meta.url), { signal: AbortSignal.timeout(20000) });
+  if (!response.ok) throw new Error(`Country data: ${response.status}`);
+  const countries = await response.json();
   const map = new maplibregl.Map({
     container,
     style: styleFor(countries, mode, level ?? MODES.find(m => m.id === mode)?.level),
@@ -129,7 +124,10 @@ export async function createGlobe(container, { mode = 'satellite', level, center
   globalThis.__globeMap = map; // для автопроверки: перерисовка во вкладке без анимации
   // ошибки стиля и загрузки видны сразу, а не теряются до события load
   map.on('error', e => (globalThis.__globeErrors ??= []).push(String(e.error?.message ?? e.message ?? e)));
-  await new Promise(r => map.once('load', r));
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { map.remove(); reject(new Error('Globe loading timeout')); }, 30000);
+    map.once('load', () => { clearTimeout(timer); resolve(); });
+  });
   return { map, countries, maplibregl };
 }
 

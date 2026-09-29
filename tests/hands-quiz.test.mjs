@@ -222,7 +222,7 @@ test('джойстик: раскрыл ладонь — глобус мягко 
   assert.equal(r.last.kind, 'error');
   r = run(e, seq(3, () => ({ Right: h(POSE.PALM, 0.05, 0.5), Left: none })));
   const rel = r.actions.find(a => a.type === 'release');
-  assert.ok(rel && rel.vx < 0, JSON.stringify(rel));
+  assert.ok(rel && rel.vx === 0, 'раскрытая ладонь останавливает скорость до отпускания');
 });
 
 // ---------- джойстик: попытки «сломать» ----------
@@ -344,7 +344,7 @@ test('джойстик с шумом и пропусками кадров: у ц
   const vs = late.map(a => a.vx), mean = vs.reduce((s, v) => s + v, 0) / vs.length;
   const sd = Math.sqrt(vs.reduce((s, v) => s + (v - mean) ** 2, 0) / vs.length);
   assert.ok(mean > 0.03 && sd < mean * 0.25, `mean ${mean} sd ${sd}`);
-  assert.ok(late.every(a => Math.abs(a.vy) < Math.abs(a.vx)));
+  assert.ok(late.every(a => (a.vx === 0 && a.vy === 0) || Math.abs(a.vy) < Math.abs(a.vx))); // потеря руки теперь сразу даёт стоп
 });
 
 test('джойстик откликается быстрее: сдвиг кулака почти сразу даёт скорость', () => {

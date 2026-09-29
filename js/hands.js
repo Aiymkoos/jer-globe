@@ -108,6 +108,7 @@ export class GlobeHands {
       if (prev) moves[key] = { dx: s.x - prev.x, dy: s.y - prev.y, dt: Math.max(0.001, (now - prev.t) / 1000) };
       this.palm[key] = s;
     }
+    const previousGrabbers = Object.keys(this.grab);
     const wasGrabbing = Object.keys(this.grab).length > 0;
     for (const key of new Set([...Object.keys(this.pose), ...Object.keys(this.grab)])) {
       if (hands[key]?.present) continue;
@@ -121,7 +122,7 @@ export class GlobeHands {
     for (const [key, h] of list) {
       if (h.pose === POSE.FIST && !this.spread[key]) {
         if (this.grab[key]) this.grab[key].open = 0;
-        else this.grab[key] = { open: 0, ax: this.palm[key].x, ay: this.palm[key].y };
+        else { this.grab[key] = { open: 0, ax: this.palm[key].x, ay: this.palm[key].y }; delete moves[key]; }
       }
       else if (this.grab[key]) {
         // Щипок тоже отпускает не с одного кадра: сжатый кулак иногда на миг распознаётся как щипок.
@@ -136,7 +137,7 @@ export class GlobeHands {
     // Отпустил глобус — пусть крутится дальше по инерции.
     if (wasGrabbing && !Object.keys(this.grab).length) {
       if (this.spin) {
-        if (this.spin.vx || this.spin.vy) act({ type: 'release', vx: this.spin.vx * 0.6, vy: this.spin.vy * 0.6 });
+        act({ type: 'release', vx: this.spin.vx * 0.6, vy: this.spin.vy * 0.6 });
         this.spin = null;
       } else if (this.vel.length) {
         const n = this.vel.length;
@@ -144,6 +145,9 @@ export class GlobeHands {
       }
       this.vel = [];
     }
+
+    if (!grabbers.length && this.spin) act({ type: 'spin', vx: 0, vy: 0 });
+    if (previousGrabbers.length === 2 && grabbers.length === 1) { const key = grabbers[0]; delete moves[key]; this.grab[key].ax = this.palm[key].x; this.grab[key].ay = this.palm[key].y; }
 
     if (grabbers.length === 2) {
       // Масштаб двумя руками.
@@ -166,7 +170,7 @@ export class GlobeHands {
       if (grabbers.length === 1 && this.style === 'joystick') {
         const key = grabbers[0], g = this.grab[key], p = this.palm[key];
         const off = { x: p.x - g.ax, y: p.y - g.ay };
-        const s = joySpeed(off);
+        const s = hands[key].pose === POSE.FIST || hands[key].pose === POSE.OTHER ? joySpeed(off) : { vx: 0, vy: 0, k: 0 };
         this.spin = { vx: s.vx, vy: s.vy };
         act({ type: 'spin', vx: s.vx, vy: s.vy });
         out.joy = { key, ax: g.ax, ay: g.ay, x: p.x, y: p.y, k: s.k };
@@ -178,7 +182,7 @@ export class GlobeHands {
         else out.hint = 'Держишь глобус. Сдвинь кулак чуть в сторону — поедет туда, чем дальше, тем быстрее';
       } else if (grabbers.length === 1) {
         const key = grabbers[0];
-        const m = moves[key];
+        const m = [POSE.FIST, POSE.OTHER].includes(hands[key].pose) ? moves[key] : null;
         if (m && Math.hypot(m.dx, m.dy) > T.DEAD) {
           const speed = Math.hypot(m.dx, m.dy) / m.dt;
           const k = speed > T.FAST ? T.FAST / speed : 1; // слишком резко — ограничиваем
@@ -199,15 +203,15 @@ export class GlobeHands {
     // Масштаб пальцами: свёл большой и указательный — «зацепил», разводишь — ближе.
     for (const [key, h] of list) {
       if (this.grab[key]) continue;
-      if (h.pose === POSE.PINCH && !this.spread[key]) this.spread[key] = { r: h.pinch, idle: now, started: now };
+      if (h.pose === POSE.PINCH && Number.isFinite(h.pinch) && !this.spread[key]) this.spread[key] = { r: Math.max(.08, h.pinch), idle: now, started: now };
       const sp = this.spread[key];
       if (!sp) continue;
       // Раскрыл ладонь или сжал кулак — «отпустил» масштаб. Палец замер на 2 с — снова указатель.
-      if (h.pose === POSE.PALM || h.pose === POSE.FIST || h.pinch == null || (h.pose === POSE.POINT && now - sp.idle > 2000)) {
+      if (h.pose === POSE.PALM || h.pose === POSE.FIST || !Number.isFinite(h.pinch) || (h.pose === POSE.POINT && now - sp.idle > 2000)) {
         delete this.spread[key];
         continue;
       }
-      const r = sp.r + (h.pinch - sp.r) * 0.5;
+      const r = sp.r + (Math.max(.08, h.pinch) - sp.r) * 0.5;
       if (Math.abs(r - sp.r) > T.SPREAD_DEAD) {
         act({ type: 'zoom', dz: Math.log2(r / sp.r) * T.SPREAD_ZOOM });
         sp.r = r;
@@ -221,7 +225,7 @@ export class GlobeHands {
     // Остальные руки: ладонь, палец, подсказки.
     for (const [key, h] of list) {
       if (this.grab[key] || this.spread[key]) continue;
-      if (h.pose === POSE.PALM && grabbers.length === 0) this.palmGesture(h, now, ctx, out, act);
+      if (h.pose === POSE.PALM && grabbers.length === 0) this.palmGesture(h, now, ctx, out, act, key);
       else if (h.pose === POSE.POINT) out.pointers.push({ key, x: h.tip.x, y: h.tip.y });
       else if (h.pose === POSE.OTHER && h.hint && now - this.poseSince[key] > 350) {
         out.hint ??= h.near === POSE.FIST ? 'Сожми кулак плотнее, чтобы схватить глобус' : h.hint;
@@ -236,9 +240,9 @@ export class GlobeHands {
   }
 
   // Ладонь: горизонтальный взмах — режим; в режимах с морем — вверх/вниз уровень.
-  palmGesture(h, now, ctx, out, act) {
+  palmGesture(h, now, ctx, out, act, key) {
     if (now < this.cooldown) return;
-    if (!this.swipe || now - this.swipe.t > T.SWIPE_MAX_MS) this.swipe = { x: h.palm.x, y: h.palm.y, t: now, ly: h.palm.y };
+    if (!this.swipe || this.swipe.key !== key || now - this.swipe.t > T.SWIPE_MAX_MS) this.swipe = { key, x: h.palm.x, y: h.palm.y, t: now, ly: h.palm.y };
     const dx = h.palm.x - this.swipe.x, dy = h.palm.y - this.swipe.y, age = now - this.swipe.t;
     if (ctx.levelMode && Math.abs(dy) > Math.abs(dx)) {
       const dv = -(h.palm.y - this.swipe.ly) * T.LEVEL_GAIN;

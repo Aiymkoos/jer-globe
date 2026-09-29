@@ -1,0 +1,18 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { HintPolicy, readSpeed, panGain, globeError } from '../js/interaction.js';
+import { iceRamp, floodRamp } from '../js/terrain.js';
+import { GlobeHands } from '../js/hands.js';
+import { POSE } from '../js/gestures.js';
+const hand=(pose,x=.5,y=.5,extra={})=>({present:true,pose,palm:{x,y},tip:{x,y},...extra});
+test('reading time protects action hints against per-frame replacements',()=>{const p=new HintPolicy();assert.ok(p.offer('Режим изменён','ok',2500,0));assert.equal(p.offer('Кулак — вращение','info',0,4000),null);assert.equal(p.offer('Кулак — вращение','info',0,4600),null);assert.equal(p.offer('Кулак — вращение','info',0,4900)?.text,'Кулак — вращение');});
+test('an error stays readable and transient errors do not flash',()=>{const p=new HintPolicy();p.offer('Поверни глобус','info',0,0);assert.equal(p.offer('Раскрой ладонь','error',0,100),null);assert.equal(p.offer('Раскрой ладонь','error',0,400)?.kind,'error');for(let t=500;t<6800;t+=100)assert.equal(p.offer('Веди кулак','info',0,t),null);assert.equal(p.offer('Веди кулак','info',0,7000),null);assert.ok(p.offer('Веди кулак','info',0,7300));});
+test('repeated same hint never extends its hold forever',()=>{const p=new HintPolicy();p.offer('A','info',0,0);for(let t=100;t<10000;t+=100)p.offer('A','info',0,t);p.offer('B','info',0,10000);assert.equal(p.offer('B','info',0,10300)?.text,'B');});
+test('sensitivity defaults safely and normal speed is half former gain',()=>{for(const value of [null,undefined,'bad',-1,5,NaN])assert.equal(readSpeed(value),1);assert.equal(readSpeed('0'),0);assert.equal(panGain('drag',1),1);assert.ok(panGain('drag',0)<panGain('drag',1));assert.ok(panGain('joystick',1)<1);});
+test('WebGL failure tells the real cause instead of blaming internet',()=>{assert.match(globeError(new Error('WebGL2 is required')),/аппаратное ускорение/);assert.match(globeError(new Error('timeout')),/соединение/);});
+test('ice and flood expressions stay valid across all allowed sea levels',()=>{for(let n=-1300;n<=1000;n++){const l=n/10;for(const ramp of [iceRamp(l),floodRamp(l)]){if(typeof ramp==='string')continue;const stops=ramp.filter((_,i)=>i>=3&&i%2===1);assert.ok(stops.every((v,i)=>Number.isFinite(v)&&(!i||v>stops[i-1])),JSON.stringify({l,stops}));}}});
+test('moving pointer then closing fist does not teleport globe on grab',()=>{const e=new GlobeHands('drag');e.update({Right:hand(POSE.POINT,.2)},0);const out=e.update({Right:hand(POSE.FIST,.7)},33);assert.ok(!out.actions.some(a=>a.type==='rotate'));});
+test('first open-palm observation immediately stops drag',()=>{const e=new GlobeHands('drag');e.update({Right:hand(POSE.FIST)},0);e.update({Right:hand(POSE.FIST,.6)},33);assert.ok(!e.update({Right:hand(POSE.PALM,.8)},66).actions.some(a=>a.type==='rotate'));});
+test('missing hand immediately stops joystick while preserving anchor briefly',()=>{const e=new GlobeHands();e.update({Right:hand(POSE.FIST)},0);e.update({Right:hand(POSE.FIST,.7)},33);const out=e.update({},66);assert.ok(out.actions.some(a=>a.type==='spin'&&a.vx===0&&a.vy===0));assert.ok(e.grab.Right);});
+test('zero pinch distance does not send infinite zoom',()=>{const e=new GlobeHands('drag');for(let t=0;t<5;t++){const out=e.update({Right:hand(POSE.PINCH,.5,.5,{pinch:t?0.2:0})},t*33);assert.ok(out.actions.every(a=>a.type!=='zoom'||Number.isFinite(a.dz)));}});
+test('a different palm cannot complete another hands swipe',()=>{const e=new GlobeHands('drag');e.update({Left:hand(POSE.PALM,.2)},0);assert.ok(!e.update({Right:hand(POSE.PALM,.8)},150).actions.some(a=>a.type==='swipe'));});

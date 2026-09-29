@@ -7,6 +7,7 @@ import { classifyHand, POSE, POSE_NAMES } from './gestures.js';
 import { Quiz } from './quiz.js';
 import { fetchQuakes, fetchIss, countryAtLngLat, timeAgo } from './live.js';
 import { OneEuro } from './filters.js';
+import { HintPolicy, readSpeed, panGain, SPEEDS, globeError } from './interaction.js';
 import { preload } from './loader.js';
 
 const $ = id => document.getElementById(id);
@@ -20,7 +21,6 @@ const state = {
   camera: false,
   hover: {},        // страна под пальцем каждой руки
   dwell: {},        // наведение: { key: { target, t } }
-  inertia: null,
   quiz: null,
   quizLock: 0,
   cardId: null,
@@ -30,16 +30,18 @@ const state = {
 let globe = null;
 let map = null;
 let tracker = null;
-let rotStyle = 'joystick';
-try { rotStyle = new URLSearchParams(location.search).has('drag') || localStorage.getItem('jer-rot') === 'drag' ? 'drag' : 'joystick'; } catch {}
+let rotStyle = 'drag';
+let speed = 1;
+try { speed = readSpeed(localStorage.getItem('jer-speed')); } catch {}
+try { rotStyle = new URLSearchParams(location.search).has('joystick') || localStorage.getItem('jer-control-v2') === 'joystick' ? 'joystick' : 'drag'; } catch {}
 const engine = new GlobeHands(rotStyle);
 function showRotStyle() {
-  $('rotStyle').textContent = engine.style === 'joystick' ? '✊ джойстик' : '✊ перетаскивание';
+  $('rotStyle').textContent = engine.style === 'joystick' ? 'Режим: джойстик' : 'Режим: перетаскивание';
 }
 $('rotStyle').addEventListener('click', () => {
   engine.style = engine.style === 'joystick' ? 'drag' : 'joystick';
-  engine.grab = {}; engine.spin = null; engine.vel = []; spinTarget = null;
-  try { localStorage.setItem('jer-rot', engine.style); } catch {}
+  resetMotion();
+  try { localStorage.setItem('jer-control-v2', engine.style); } catch {}
   showRotStyle();
   hint(engine.style === 'joystick' ? 'Джойстик: сдвинь кулак — глобус едет туда, верни на место — стоп' : 'Перетаскивание: кулаком тащи глобус, раскрой ладонь — отпустить', 'info', 2500);
 });
@@ -48,15 +50,14 @@ const lastPos = {};
 const filters = {};
 let rawHands = [];
 let lastResultAt = -Infinity;
-let hintHold = 0;
+const hintPolicy = new HintPolicy();
+let quizTimer = null;
 let view = { pointers: [] };
 
 // ---------- подсказка ----------
 function hint(text, kind = 'info', hold = 0) {
   if (!text) return;
-  const now = performance.now();
-  if (now < hintHold && !hold) return;
-  if (hold) hintHold = now + hold;
+  if (!hintPolicy.offer(text, kind, hold, performance.now())) return;
   const el = $('hint');
   el.textContent = text;
   el.className = `hint ${kind === 'info' ? '' : kind}`;
@@ -76,6 +77,9 @@ function renderModes() {
 function setMode(id) {
   const m = MODES.find(x => x.id === id);
   if (!m || !map) return;
+  clearTimeout(quizTimer); state.quizLock = 0; state.cardId = null;
+  resetMotion();
+  clearQuizMarks(); $('card').hidden = true;
   state.mode = id;
   if (m.level != null) state.level = m.level;
   applyMode(map, id, state.level);
@@ -140,6 +144,7 @@ async function showCard(c) {
 
 // ---------- викторина ----------
 function startQuiz() {
+  clearTimeout(quizTimer); state.quizLock = 0; clearQuizMarks();
   state.quiz ??= new Quiz(globe.countries);
   state.quiz.reset();
   $('card').hidden = true;
@@ -180,9 +185,9 @@ function answerQuiz(c) {
   if (r.type === 'reveal') setFlag(map, r.wrong, 'wrong', true);
   map.flyTo({ center: [target.lx, target.ly], zoom: Math.max(map.getZoom(), 2.2), duration: 1400 });
   hint(r.type === 'correct' ? `${r.hint} · +${r.points}` : r.hint, r.type === 'correct' ? 'ok' : 'error', 3000);
-  state.quizLock = performance.now() + 2600;
+  state.quizLock = performance.now() + 5000;
   renderQuiz();
-  setTimeout(() => { clearQuizMarks(); q.next(); renderQuiz(); }, 2600);
+  quizTimer = setTimeout(() => { if (state.mode !== 'quiz' || state.quiz !== q) return; clearQuizMarks(); q.next(); renderQuiz(); }, 5000);
 }
 
 // ---------- живые данные ----------
@@ -237,7 +242,10 @@ function handsFrom(res) {
     rawHands.push({ key, norm: h.norm, pose: cls.pose });
     $(key === 'Left' ? 'stateLeft' : 'stateRight').textContent = `${key === 'Left' ? 'левая' : 'правая'}: ${POSE_NAMES[cls.pose]}`;
   });
-  for (const key of ['Left', 'Right']) if (!out[key].present) $(key === 'Left' ? 'stateLeft' : 'stateRight').textContent = `${key === 'Left' ? 'левая' : 'правая'}: —`;
+  for (const key of ['Left', 'Right']) if (!out[key].present) {
+    $(key === 'Left' ? 'stateLeft' : 'stateRight').textContent = `${key === 'Left' ? 'левая' : 'правая'}: —`;
+    filters[key]?.x.reset(); filters[key]?.y.reset();
+  }
   return out;
 }
 
@@ -246,13 +254,14 @@ const DWELL_MS = 700;
 function point(p, key, now) {
   const x = p.x * innerWidth, y = p.y * innerHeight;
   const el = document.elementFromPoint(x, y)?.closest('[data-target]');
-  const country = !el && onGlobe(map, [x, y]) ? countryAt(map, [x, y]) : null;
+  const blocked = document.elementFromPoint(x, y)?.closest('.panel, .camera, .controls, .hint, .start, .mode-info');
+  const country = !el && !blocked && onGlobe(map, [x, y]) ? countryAt(map, [x, y]) : null;
   if (state.hover[key]?.id !== country?.id) {
     setFlag(map, state.hover[key]?.id, 'hover', false);
     if (country) setFlag(map, country.id, 'hover', true);
     state.hover[key] = country;
   }
-  const target = el ? el.dataset.target : country ? `country:${country.id}` : state.mode === 'quiz' ? 'ocean' : null;
+  const target = el ? el.dataset.target : country ? `country:${country.id}` : !blocked && state.mode === 'quiz' ? 'ocean' : null;
   const d = state.dwell[key];
   if (!d || d.target !== target) state.dwell[key] = { target, t: now, fired: false };
   const cur = state.dwell[key];
@@ -262,7 +271,7 @@ function point(p, key, now) {
   if (progress >= 1 && !cur.fired) {
     cur.fired = true;
     if (el) el.click();
-    else if (state.mode === 'quiz') answerQuiz(country);
+    else if (state.mode === 'quiz' && !blocked) answerQuiz(country);
     else if (country) showCard(country);
   }
   return { key, x, y, progress, country };
@@ -271,7 +280,7 @@ function point(p, key, now) {
 // ---------- отрисовка курсоров и руки в окне камеры ----------
 function drawHud() {
   const dpr = Math.min(2, devicePixelRatio || 1);
-  if (hud.width !== innerWidth * dpr) { hud.width = innerWidth * dpr; hud.height = innerHeight * dpr; }
+  if (hud.width !== innerWidth * dpr || hud.height !== innerHeight * dpr) { hud.width = innerWidth * dpr; hud.height = innerHeight * dpr; }
   const ctx = hud.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, innerWidth, innerHeight);
@@ -334,7 +343,6 @@ function drawHud() {
 }
 
 // ---------- главный цикл ----------
-const ROTATE_GAIN = 2; // небольшое движение руки заметно поворачивает глобус
 const SPIN_EASE = 0.09; // с, за сколько скорость джойстика догоняет руку (меньше — отзывчивее, больше — плавнее)
 let last = performance.now();
 let spinTarget = null, spin = { vx: 0, vy: 0 };
@@ -343,23 +351,25 @@ function frame(now) {
   const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
   last = now;
   if (!map) return;
+  if (document.hidden) return;
 
   if (state.camera && tracker && !document.hidden) {
     const res = tracker.detect(video, now);
     let hands = null;
-    if (res) { hands = handsFrom(res); lastResultAt = now; }
-    else if (now - lastResultAt > 400) hands = { Left: { present: false }, Right: { present: false } };
+    if (res && (res.sampleId == null || now - res.sampleId < 350)) { hands = handsFrom(res); lastResultAt = now; }
+    else if (now - lastResultAt > 250) hands = { Left: { present: false }, Right: { present: false } };
     if (hands) {
       const out = engine.update(hands, now, { levelMode: ['flood', 'iceage'].includes(state.mode) });
       for (const a of out.actions) {
-        if (a.type === 'spin') { state.inertia = null; spinTarget = { vx: a.vx, vy: a.vy, t: now }; }
-        else if (a.type === 'rotate') { state.inertia = null; map.panBy([-a.dx * innerWidth * ROTATE_GAIN, -a.dy * innerHeight * ROTATE_GAIN], { duration: 0 }); }
+        if (a.type === 'spin') { spinTarget = { vx: a.vx, vy: a.vy, t: now }; }
+        else if (a.type === 'rotate') { map.panBy([-a.dx * innerWidth * panGain(engine.style, speed), -a.dy * innerHeight * panGain(engine.style, speed)], { duration: 0 }); }
         else if (a.type === 'release') {
           if (engine.style === 'joystick') spinTarget = null; // джойстик: скорость плавно гаснет сама
-          else state.inertia = { vx: a.vx, vy: a.vy };
+          // Перетаскивание останавливается сразу, без докручивания.
         }
         else if (a.type === 'zoom') {
-          const z = map.getZoom() + a.dz;
+          const dz = Math.max(-.3, Math.min(.3, a.dz));
+          const z = map.getZoom() + dz;
           if (z > map.getMaxZoom() && a.dz > 0) hint('Ближе уже некуда — это максимальное приближение', 'error', 1200);
           map.jumpTo({ zoom: Math.max(0.8, Math.min(map.getMaxZoom(), z)) });
         } else if (a.type === 'swipe') shiftMode(a.dir);
@@ -367,7 +377,8 @@ function frame(now) {
       }
       view.pointers = out.pointers.map(p => point(p, p.key, now));
       view.joy = out.joy;
-      for (const key of ['Left', 'Right']) if (!out.pointers.some(p => p.key === key) && state.hover[key]) { setFlag(map, state.hover[key].id, 'hover', false); state.hover[key] = null; state.dwell[key] = null; }
+      for (const key of ['Left', 'Right']) if (!out.pointers.some(p => p.key === key)) { setFlag(map, state.hover[key]?.id, 'hover', false); state.hover[key] = null; state.dwell[key] = null; }
+      if (!out.pointers.length) document.querySelectorAll('[data-target].aim').forEach(el => { el.classList.remove('aim'); el.style.removeProperty('--p'); });
       hint(out.hint, out.kind);
     }
   }
@@ -375,40 +386,37 @@ function frame(now) {
   // Джойстик: скорость задаёт рука, а крутим каждый кадр экрана (60 раз в секунду),
   // а не только когда пришёл кадр камеры, — поэтому без рывков. Скорость меняется плавно.
   if (spinTarget && now - spinTarget.t > T.LOST_MS) spinTarget = null; // рука пропала — стоп
+  if (!view.joy && state.camera) spinTarget = null;
   const tv = spinTarget ?? { vx: 0, vy: 0 };
   const ease = 1 - Math.exp(-dt / SPIN_EASE);
   spin.vx += (tv.vx - spin.vx) * ease; spin.vy += (tv.vy - spin.vy) * ease;
-  if (Math.hypot(spin.vx, spin.vy) > 0.002) map.panBy([-spin.vx * dt * innerWidth * ROTATE_GAIN, -spin.vy * dt * innerHeight * ROTATE_GAIN], { duration: 0 });
+  if (Math.hypot(spin.vx, spin.vy) > 0.002) map.panBy([-spin.vx * dt * innerWidth * panGain(engine.style, speed), -spin.vy * dt * innerHeight * panGain(engine.style, speed)], { duration: 0 });
   else if (!spinTarget) spin.vx = spin.vy = 0;
 
-  // Отпущенный глобус крутится дальше и плавно останавливается.
-  if (state.inertia) {
-    const v = state.inertia;
-    map.panBy([-v.vx * dt * innerWidth * ROTATE_GAIN, -v.vy * dt * innerHeight * ROTATE_GAIN], { duration: 0 });
-    v.vx *= 0.93; v.vy *= 0.93;
-    if (Math.hypot(v.vx, v.vy) < 0.02) state.inertia = null;
-  }
   drawHud();
 }
 
 // ---------- запуск ----------
-let loaded = false;
+let loaded = false, cameraStarting = false;
 const assets = preload(p => {
   $('loadBar').style.width = `${Math.round(p * 100)}%`;
   if (!loaded) $('loadText').textContent = `Загружаю распознавание рук: ${Math.round(p * 100)}%`;
 });
-assets.then(() => { loaded = true; $('loadText').textContent = 'Распознавание загружено — можно начинать'; }, () => {});
+assets.then(() => { loaded = true; $('loadText').textContent = 'Распознавание готово'; }, () => { $('loadText').textContent = 'Распознавание не загрузилось. При запуске камеры попробуем снова; мышь работает без него.'; });
 
 async function startCamera() {
+  if (!map || cameraStarting) return;
+  if (state.camera) { stopCamera(); return; }
   const btn = $('camStart');
-  btn.disabled = true;
+  cameraStarting = true; btn.disabled = true; $('cameraToggle').disabled = true; $('mouseStart').disabled = true;
   hint('Разреши доступ к камере в окне браузера', 'info', 800);
   try {
     const mod = await import('./tracker.js');
     await mod.startCamera(video);
     $('loadText').textContent = loaded ? 'Запускаю распознавание…' : 'Камера готова, догружаю распознавание…';
     tracker = await mod.createHandTracker(await preload());
-    state.camera = true;
+    resetMotion(); state.camera = true;
+    $('cameraToggle').textContent = 'Выключить камеру';
     $('camEmpty').hidden = true;
     $('start').hidden = true;
     hint('Сожми кулак и веди — глобус крутится. Сведи и разведи большой и указательный — масштаб', 'info', 3000);
@@ -417,20 +425,24 @@ async function startCamera() {
     video.srcObject?.getTracks().forEach(t => t.stop());
     $('loadText').textContent = e.name === 'NotAllowedError' ? 'Камера запрещена — разреши её в адресной строке' : 'Не удалось запустить камеру или распознавание. Проверь интернет и попробуй снова';
   } finally {
-    btn.disabled = false;
+    cameraStarting = false; btn.disabled = false; $('cameraToggle').disabled = false; $('mouseStart').disabled = false;
   }
 }
 
 async function init() {
+  $('camStart').disabled = true; $('mouseStart').disabled = true; $('cameraToggle').disabled = true;
   renderModes();
   try {
     globe = await createGlobe('map', { mode: state.mode });
     map = globe.map;
   } catch (e) {
     console.error(e);
-    hint('Не удалось загрузить глобус. Проверь интернет и обнови страницу', 'error', 60000);
+    const message = globeError(e);
+    $('mapStatus').textContent = message; $('retryMap').hidden = false;
+    hint(message, 'error', 60000);
     return;
   }
+  $('mapStatus').textContent = 'Глобус готов'; $('camStart').disabled = false; $('mouseStart').disabled = false; $('cameraToggle').disabled = false;
   setMode(state.mode);
   map.on('click', e => {
     const c = countryAt(map, [e.point.x, e.point.y]);
@@ -453,8 +465,10 @@ async function init() {
 }
 
 $('camStart').onclick = startCamera;
-$('mouseStart').onclick = () => { $('start').hidden = true; hint('Мышь: тяни — крутить, колёсико — масштаб, клик по стране — карточка, цифры 1–7 — режимы', 'info', 4000); };
+$('mouseStart').onclick = () => { if (!map) return; $('start').hidden = true; hint('Мышь: тяни — крутить, колёсико — масштаб, клик по стране — карточка, цифры 1–7 — режимы', 'info', 4000); };
 addEventListener('keydown', e => {
+  if (e.target.closest('input, select, textarea, button')) return;
+  if (e.key === 'Escape') { $('helpPanel').hidden = true; $('helpToggle').setAttribute('aria-expanded', 'false'); $('card').hidden = true; state.cardId = null; resetMotion(); }
   const n = Number(e.key);
   if (n >= 1 && n <= MODES.length) setMode(MODES[n - 1].id);
   if (e.key === 'ArrowRight') shiftMode(1);
@@ -465,3 +479,27 @@ addEventListener('pagehide', () => { tracker?.close?.(); video.srcObject?.getTra
 if (DEBUG && new URLSearchParams(location.search).get('show')) $('start').hidden = true;
 
 init();
+
+function resetMotion() {
+  Object.assign(engine, new GlobeHands(engine.style));
+  spinTarget = null; spin = { vx: 0, vy: 0 };
+  for (const c of Object.values(state.hover)) if (map && c) setFlag(map, c.id, 'hover', false);
+  state.hover = {}; state.dwell = {}; view = { pointers: [] }; rawHands = [];
+  document.querySelectorAll('[data-target].aim').forEach(el => { el.classList.remove('aim'); el.style.removeProperty('--p'); });
+  for (const key of Object.keys(filters)) { filters[key].x.reset(); filters[key].y.reset(); }
+  for (const key of Object.keys(lastPos)) delete lastPos[key];
+}
+function stopCamera() {
+  tracker?.close(); tracker = null; video.srcObject?.getTracks().forEach(t => t.stop()); video.srcObject = null;
+  state.camera = false; resetMotion(); $('camEmpty').hidden = false; $('cameraToggle').textContent = 'Включить камеру';
+  $('stateLeft').textContent = 'левая: —'; $('stateRight').textContent = 'правая: —';
+  hint('Камера выключена. Можно продолжить мышью.', 'info', 5000);
+}
+$('cameraToggle').onclick = startCamera;
+$('retryMap').onclick = () => location.reload();
+$('closeCard').onclick = () => { $('card').hidden = true; state.cardId = null; };
+$('helpToggle').onclick = () => { $('helpPanel').hidden = !$('helpPanel').hidden; $('helpToggle').setAttribute('aria-expanded', String(!$('helpPanel').hidden)); };
+function showSpeed() { $('sensitivity').textContent = `Скорость: ${SPEEDS[speed].name}`; }
+$('sensitivity').onclick = () => { speed = (speed + 1) % SPEEDS.length; resetMotion(); showSpeed(); try { localStorage.setItem('jer-speed', String(speed)); } catch {} hint(`Скорость «${SPEEDS[speed].name}». Кулак — потяни глобус, раскрой ладонь — останови.`, 'info', 5000); };
+showSpeed();
+addEventListener('visibilitychange', () => { if (document.hidden) resetMotion(); });

@@ -7,7 +7,7 @@
   <meta name="description" content="3D-глобус, которым управляешь руками через веб-камеру: Земля без воды, потоп, ледниковый период, ночные огни, МКС и землетрясения в реальном времени.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="vendor/maplibre/maplibre-gl.css">
   <link rel="stylesheet" href="css/style.css">
 </head>
@@ -36,7 +36,7 @@
     <ul id="quakeList"><li>Загружаю данные USGS…</li></ul>
   </aside>
 
-  <aside class="panel right card" id="card" hidden>
+  <aside class="panel right card" id="card" hidden><button class="panel-close" id="closeCard" data-target="cmd:close-card" aria-label="Закрыть карточку">×</button>
     <div class="card-head"><img id="cardFlag" alt="" onerror="this.hidden=true"><div><b id="cardName"></b><span id="cardCont"></span></div></div>
     <dl>
       <dt>Столица</dt><dd id="cardCapital"></dd>
@@ -59,29 +59,53 @@
     <canvas id="handCanvas"></canvas>
     <div class="cam-empty" id="camEmpty">Камера выключена</div>
     <div class="cam-state"><span id="stateLeft">левая: —</span><span id="stateRight">правая: —</span></div>
-    <button class="rot-style" id="rotStyle" data-target="cmd:rot-style" title="Как кулак крутит глобус">✊ джойстик</button>
+    <button class="rot-style" id="rotStyle" data-target="cmd:rot-style" title="Как кулак крутит глобус">Режим: перетаскивание</button>
   </div>
 
+  <div class="controls" aria-label="Настройки управления">
+    <button id="sensitivity" data-target="cmd:speed">Скорость: Обычно</button>
+    <button id="helpToggle" data-target="cmd:help" aria-expanded="false" aria-controls="helpPanel">Управление</button>
+    <button id="cameraToggle">Включить камеру</button>
+  </div>
+  <aside class="panel help-panel" id="helpPanel" hidden>
+    <span class="eyebrow">Всегда под рукой</span><h3>Четыре движения</h3>
+    <ol class="gesture-guide">
+      <li><b>Кулак — повернуть</b><span>Потяни в нужную сторону. Раскрой ладонь — стоп. В режиме джойстика верни кулак в исходную точку.</span></li>
+      <li><b>Пальцы — масштаб</b><span>Соедини большой и указательный, затем разведи — ближе; сведи — дальше. Открытая ладонь завершает жест.</span></li>
+      <li><b>Указатель — выбрать</b><span>Задержи палец над страной или кнопкой. Кольцо покажет, сколько осталось.</span></li>
+      <li><b>Ладонь — сменить вид</b><span>Взмахни горизонтально. В режимах с уровнем моря веди вверх или вниз, чтобы менять воду.</span></li>
+    </ol><p class="tiny">Мышь: перетаскивание и колёсико. Клавиши 1–7: режимы. Escape: закрыть панели.</p>
+  </aside>
   <div class="hint" id="hint" role="status" aria-live="polite">Загрузка глобуса…</div>
 
   <div class="start" id="start">
     <div class="start-card">
-      <span class="eyebrow">3D-глобус · жесты · веб-камера</span>
-      <h1>Жер</h1>
-      <p class="lead">Возьми планету в руки: крути её кулаком, приближай пальцами, как на телефоне, до улиц своего города, осуши океаны, подними уровень моря и найди МКС прямо сейчас.</p>
-      <ul class="gest">
-        <li><b>✊ Кулак</b> — как джойстик: сдвинь кулак — глобус едет туда, верни на место — стоп, раскрой ладонь — отпустить</li>
-        <li><b>🤏 Большой + указательный</b>: свести и развести — ближе, свести — дальше</li>
-        <li><b>☝ Палец</b> на страну — узнать о ней</li>
-        <li><b>✋ Взмах ладонью</b> — сменить режим</li>
-      </ul>
-      <div class="actions">
-        <button class="primary" id="camStart">Начать с камерой</button>
-        <button class="ghost" id="mouseStart">Без камеры — мышью</button>
+      <div class="intro-main">
+        <span class="eyebrow">Интерактивный атлас · 01</span>
+        <h1>Земля.<br><em>Ближе.</em></h1>
+        <p class="lead">От океанских глубин до огней городов.<br>Исследуй планету движением руки.</p>
+        <div class="atlas-mark" aria-hidden="true">
+          <svg viewBox="0 0 300 140" fill="none"><g stroke="currentColor" stroke-width=".7"><ellipse cx="150" cy="70" rx="128" ry="62"/><ellipse cx="150" cy="70" rx="78" ry="62"/><ellipse cx="150" cy="70" rx="28" ry="62"/><path d="M22 70h256M39 39h222M39 101h222M150 8v124"/></g><circle cx="193" cy="44" r="3" fill="currentColor"/></svg>
+          <span>43°15′ N &nbsp; 76°57′ E</span>
+        </div>
+        <div class="actions">
+          <button class="primary" id="camStart" disabled>Исследовать с камерой <span aria-hidden="true">↗</span></button>
+          <button class="ghost" id="mouseStart" disabled>Открыть мышью</button>
+        </div>
+        <p class="tiny privacy">Камера видит движения. Видео остаётся на твоём устройстве.</p>
       </div>
-      <div class="meter"><i id="loadBar"></i></div>
-      <p class="tiny" id="loadText">Загружаю распознавание рук…</p>
-      <p class="tiny">Видео обрабатывается прямо в браузере и никуда не отправляется.</p>
+      <div class="intro-guide">
+        <span class="eyebrow">Начни с одного жеста</span>
+        <ol class="gesture-guide">
+          <li><b>Сожми и потяни</b><span>Кулак поворачивает глобус вслед за рукой. Раскрой ладонь — он остановится.</span></li>
+          <li><b>Приблизь детали</b><span>Соедини большой и указательный пальцы, затем разведи их.</span></li>
+          <li><b>Выбери страну</b><span>Наведи указательный палец и задержи его на месте.</span></li>
+        </ol>
+        <p class="intro-note">Остальные жесты и настройка скорости — в разделе «Управление».</p>
+        <div class="load-status"><p id="mapStatus" role="status">Подготавливаем глобус…</p><button class="ghost" id="retryMap" hidden>Повторить загрузку</button>
+        <div class="meter"><i id="loadBar"></i></div>
+        <p class="tiny" id="loadText">Готовим распознавание рук…</p></div>
+      </div>
     </div>
   </div>
 
