@@ -3,17 +3,22 @@
 //     чем дальше от центра, тем быстрее; вернул к центру — стоп (рука не уезжает к краю кадра)
 //   (режим «перетаскивание»: кулак схватил и тащит, раскрыл ладонь — крутится по инерции)
 //   большой + указательный: свёл, затем развёл — ближе, свёл — дальше (как на телефоне)
-//   два кулака — развести/свести руки: масштаб
-//   ладонь — взмах в сторону: сменить режим; в режимах с морем — вверх/вниз уровень воды
+//   два кулака или две ладони — развести/свести руки: масштаб
+//   ладонь — взмах в сторону: сменить режим (только одной рукой, уже какое-то время в кадре);
+//     в режимах с морем — вверх/вниз уровень воды
 //   указательный палец — указатель: страна, кнопки
 
 import { POSE } from './gestures.js';
 
 export const T = {
-  SWIPE_DX: 0.14,
+  SWIPE_DX: 0.2,
   SWIPE_MAX_MS: 750,
   SWIPE_MIN_MS: 90,
-  SWIPE_COOLDOWN: 900,
+  SWIPE_COOLDOWN: 1200,
+  SWIPE_ARM_MS: 300,  // ладонь должна продержаться столько, прежде чем взмах засчитается
+  SWIPE_SETTLE_MS: 600, // рука только появилась или ушла вторая — взмахи не считаем
+  ZOOM_DEAD: 0.03,    // двуручный масштаб: изменение расстояния меньше (log2) — дрожание
+  SPREAD_IDLE_MS: 700, // масштаб пальцами: ладонь/указатель без движения столько — масштаб отпущен
   FAST: 3,            // долей кадра в секунду — «крутишь слишком резко»
   EDGE: 0.04,         // доля кадра у края
   DEAD: 0.0015,       // движения меньше — дрожание руки, глобус не трогаем
@@ -81,6 +86,8 @@ export class GlobeHands {
     this.swipe = null;
     this.cooldown = 0;
     this.spin = null;    // текущая скорость джойстика
+    this.seen = {};      // когда рука появилась в кадре
+    this.calmUntil = 0;  // до этого времени взмахи ладонью не считаем
   }
 
   /**
@@ -92,6 +99,9 @@ export class GlobeHands {
     const act = a => out.actions.push(a);
     const list = Object.entries(hands).filter(([, h]) => h?.present);
     const moves = {};
+    for (const [key] of list) this.seen[key] ??= now;
+    for (const key of Object.keys(this.seen)) if (!hands[key]?.present) delete this.seen[key];
+    if (list.length === 2) this.calmUntil = now + T.SWIPE_SETTLE_MS;
     // Долго не было кадров (вкладка скрыта) — старый захват не продолжаем.
     if (this.lastT != null && now - this.lastT > T.STALE_MS) {
       this.pose = {}; this.poseSince = {}; this.palm = {}; this.grab = {}; this.spread = {};
@@ -157,7 +167,9 @@ export class GlobeHands {
         out.kind = 'error';
         d = null; // руки сошлись — масштаб не считаем от этого расстояния, иначе потом скачок
       } else if (this.twoDist) {
-        act({ type: 'zoom', dz: Math.log2(d / this.twoDist) * T.TWO_HAND_ZOOM });
+        const r = Math.log2(d / this.twoDist);
+        if (Math.abs(r) > T.ZOOM_DEAD) act({ type: 'zoom', dz: r * T.TWO_HAND_ZOOM });
+        else d = this.twoDist; // дрожание — копим, пока не наберётся заметное движение
         out.hint = 'Разводи руки — ближе, своди — дальше';
       } else out.hint = 'Две руки: разводи — приблизить, своди — отдалить';
       this.twoDist = d;
@@ -165,6 +177,17 @@ export class GlobeHands {
       if (this.spin) act({ type: 'spin', vx: 0, vy: 0 }); // второй кулак — глобус перестаёт ехать
       this.spin = null;
       for (const k of grabbers) { this.grab[k].ax = this.palm[k].x; this.grab[k].ay = this.palm[k].y; }
+    } else if (grabbers.length === 0 && list.length === 2 && list.every(([k, h]) => h.pose === POSE.PALM && !this.spread[k])) {
+      // Две раскрытые ладони — тоже масштаб: ладонь камера видит надёжнее всего.
+      let d = dist(this.palm[list[0][0]], this.palm[list[1][0]]);
+      if (d < T.CLOSE_HANDS) d = null;
+      else if (this.twoDist) {
+        const r = Math.log2(d / this.twoDist);
+        if (Math.abs(r) > T.ZOOM_DEAD) act({ type: 'zoom', dz: r * T.TWO_HAND_ZOOM });
+        else d = this.twoDist;
+      }
+      out.hint = 'Две ладони: разводи — ближе, своди — дальше';
+      this.twoDist = d;
     } else {
       this.twoDist = null;
       if (grabbers.length === 1 && this.style === 'joystick') {
@@ -207,7 +230,8 @@ export class GlobeHands {
       const sp = this.spread[key];
       if (!sp) continue;
       // Раскрыл ладонь или сжал кулак — «отпустил» масштаб. Палец замер на 2 с — снова указатель.
-      if (h.pose === POSE.PALM || h.pose === POSE.FIST || !Number.isFinite(h.pinch) || (h.pose === POSE.POINT && now - sp.idle > 2000)) {
+      // Широко развёл пальцы — рука похожа на ладонь, но это ещё масштаб: отпускаем, только когда замерла.
+      if (h.pose === POSE.FIST || !Number.isFinite(h.pinch) || ((h.pose === POSE.PALM || h.pose === POSE.POINT) && now - sp.idle > T.SPREAD_IDLE_MS)) {
         delete this.spread[key];
         continue;
       }
@@ -225,7 +249,15 @@ export class GlobeHands {
     // Остальные руки: ладонь, палец, подсказки.
     for (const [key, h] of list) {
       if (this.grab[key] || this.spread[key]) continue;
-      if (h.pose === POSE.PALM && grabbers.length === 0) this.palmGesture(h, now, ctx, out, act, key);
+      if (h.pose === POSE.PALM && grabbers.length === 0) {
+        if (list.length === 2) continue; // две ладони — это масштаб, не взмах
+        if (now < this.calmUntil || now - this.seen[key] < T.SWIPE_SETTLE_MS || now - this.poseSince[key] < T.SWIPE_ARM_MS) {
+          this.swipe = null;
+          out.hint ??= 'Ладонь — взмах вправо или влево: сменить режим';
+          continue;
+        }
+        this.palmGesture(h, now, ctx, out, act, key);
+      }
       else if (h.pose === POSE.POINT) out.pointers.push({ key, x: h.tip.x, y: h.tip.y });
       else if (h.pose === POSE.OTHER && h.hint && now - this.poseSince[key] > 350) {
         out.hint ??= h.near === POSE.FIST ? 'Сожми кулак плотнее, чтобы схватить глобус' : h.hint;
@@ -234,8 +266,8 @@ export class GlobeHands {
     }
     if (!list.some(([k, h]) => h.pose === POSE.PALM && !this.grab[k])) this.swipe = null;
 
-    if (!list.length) out.hint = 'Подними руку перед камерой: кулак — крутить, пальцы — масштаб';
-    out.hint ??= 'Кулак — крутить · свести и развести пальцы — масштаб · палец — страна · взмах ладонью — режим';
+    if (!list.length) out.hint = 'Подними руку перед камерой: кулак — крутить, две ладони — масштаб';
+    out.hint ??= 'Кулак — крутить · две ладони развести — масштаб · палец — страна · взмах ладонью — режим';
     return out;
   }
 

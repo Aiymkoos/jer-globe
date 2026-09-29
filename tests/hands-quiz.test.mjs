@@ -54,11 +54,12 @@ test('свёл и развёл большой с указательным — б
   assert.ok(r.actions.filter(a => a.type === 'zoom').reduce((s, a) => s + a.dz, 0) < -1);
 });
 
-test('раскрыл ладонь — масштаб «отпущен», можно начать заново без отдаления', () => {
+test('раскрыл ладонь и замер — масштаб «отпущен», можно начать заново без отдаления', () => {
   const e = new GlobeHands('drag');
   run(e, [...seq(3, () => ({ Left: h(POSE.PINCH, 0.3, 0.5, { pinch: 0.2 }), Right: none })), ...seq(5, i => ({ Left: h(POSE.POINT, 0.3, 0.5, { pinch: 0.4 + i * 0.15 }), Right: none }))]);
-  const r = run(e, [...seq(3, () => ({ Left: h(POSE.PALM, 0.3, 0.5, { pinch: 1.3 }), Right: none })), ...seq(3, () => ({ Left: h(POSE.PINCH, 0.3, 0.5, { pinch: 0.2 }), Right: none }))]);
-  assert.equal(r.actions.filter(a => a.type === 'zoom').length, 0);
+  const r = run(e, [...seq(40, () => ({ Left: h(POSE.PALM, 0.3, 0.5, { pinch: 1.3 }), Right: none })), ...seq(3, () => ({ Left: h(POSE.PINCH, 0.3, 0.5, { pinch: 0.2 }), Right: none }))]);
+  // ладонь замерла — масштаб отпущен; новый щипок не отдаляет глобус
+  assert.ok(r.actions.filter(a => a.type === 'zoom').every(a => a.dz > 0));
 });
 
 test('пальцы сведены и дрожат — масштаб не прыгает', () => {
@@ -113,19 +114,19 @@ test('два кулака слишком близко — подсказка р�
 
 test('взмах ладонью меняет режим, по диагонали — нет, с подсказкой', () => {
   const e = new GlobeHands('drag');
-  let r = run(e, seq(8, i => ({ Right: h(POSE.PALM, 0.4 + i * 0.03, 0.5), Left: none })));
+  let r = run(e, [...seq(20, () => ({ Right: h(POSE.PALM, 0.4, 0.5), Left: none })), ...seq(10, i => ({ Right: h(POSE.PALM, 0.4 + i * 0.03, 0.5), Left: none }))]);
   assert.deepEqual(r.actions.filter(a => a.type === 'swipe'), [{ type: 'swipe', dir: 1 }]);
   const e2 = new GlobeHands('drag');
   const hints = [];
   const acts = [];
-  seq(8, i => ({ Right: h(POSE.PALM, 0.4 + i * 0.03, 0.4 + i * 0.03), Left: none })).forEach((f, i) => { const o = e2.update(f, i * 33); hints.push(o.hint); acts.push(...o.actions); });
+  [...seq(20, () => ({ Right: h(POSE.PALM, 0.4, 0.4), Left: none })), ...seq(10, i => ({ Right: h(POSE.PALM, 0.4 + i * 0.03, 0.4 + i * 0.03), Left: none }))].forEach((f, i) => { const o = e2.update(f, i * 33); hints.push(o.hint); acts.push(...o.actions); });
   assert.equal(acts.filter(a => a.type === 'swipe').length, 0);
   assert.ok(hints.some(x => /горизонтально/.test(x)));
 });
 
 test('в режиме с морем ладонь вверх поднимает уровень', () => {
   const e = new GlobeHands('drag');
-  const r = run(e, seq(8, i => ({ Right: h(POSE.PALM, 0.5, 0.7 - i * 0.03), Left: none })), { levelMode: true });
+  const r = run(e, [...seq(20, () => ({ Right: h(POSE.PALM, 0.5, 0.7), Left: none })), ...seq(8, i => ({ Right: h(POSE.PALM, 0.5, 0.7 - i * 0.03), Left: none }))], { levelMode: true });
   const dv = r.actions.filter(a => a.type === 'level').reduce((s, a) => s + a.dv, 0);
   assert.ok(dv > 40, String(dv));
   assert.equal(r.actions.filter(a => a.type === 'swipe').length, 0);
@@ -353,4 +354,42 @@ test('джойстик откликается быстрее: сдвиг кул�
   const target = joySpeed({ x: 0.12, y: 0 }).vx;
   // через 3 кадра камеры (≈0,1 с) скорость уже почти полная
   assert.ok(lastSpin(r).vx > target * 0.9, `${lastSpin(r).vx} / ${target}`);
+});
+
+test('две руки в кадре — режим сам не переключается', () => {
+  const e = new GlobeHands('drag');
+  // две ладони появляются и двигаются в стороны, потом одна уходит
+  const r = run(e, [
+    ...seq(15, i => ({ Left: h(POSE.PALM, 0.2 + i * 0.02, 0.5), Right: h(POSE.PALM, 0.8 - i * 0.02, 0.5) })),
+    ...seq(10, i => ({ Left: none, Right: h(POSE.PALM, 0.5 + i * 0.03, 0.5) })),
+  ]);
+  assert.equal(r.actions.filter(a => a.type === 'swipe').length, 0);
+});
+
+test('рука только вошла в кадр ладонью — это не взмах', () => {
+  const e = new GlobeHands('drag');
+  const r = run(e, seq(12, i => ({ Right: h(POSE.PALM, 0.95 - i * 0.04, 0.5), Left: none })));
+  assert.equal(r.actions.filter(a => a.type === 'swipe').length, 0);
+});
+
+test('две ладони: развести — приблизить, дрожание не трогает масштаб', () => {
+  const e = new GlobeHands('drag');
+  let r = run(e, seq(8, i => ({ Left: h(POSE.PALM, 0.4 - i * 0.03, 0.5), Right: h(POSE.PALM, 0.6 + i * 0.03, 0.5) })));
+  const dz = r.actions.filter(a => a.type === 'zoom').reduce((s, a) => s + a.dz, 0);
+  assert.ok(dz > 1, String(dz));
+  const e2 = new GlobeHands('drag');
+  r = run(e2, seq(20, i => ({ Left: h(POSE.PALM, 0.3 + (i % 2) * 0.004, 0.5), Right: h(POSE.PALM, 0.7, 0.5) })));
+  assert.equal(r.actions.filter(a => a.type === 'zoom').length, 0);
+});
+
+test('широко развёл пальцы (рука похожа на ладонь) — масштаб продолжается', () => {
+  const e = new GlobeHands('drag');
+  const r = run(e, [
+    ...seq(3, () => ({ Left: h(POSE.PINCH, 0.3, 0.5, { pinch: 0.2 }), Right: none })),
+    ...seq(4, i => ({ Left: h(POSE.OTHER, 0.3, 0.5, { pinch: 0.4 + i * 0.1 }), Right: none })),
+    ...seq(4, i => ({ Left: h(POSE.PALM, 0.3, 0.5, { pinch: 0.8 + i * 0.15 }), Right: none })),
+  ]);
+  const dz = r.actions.filter(a => a.type === 'zoom').reduce((s, a) => s + a.dz, 0);
+  assert.ok(dz > 2, String(dz));
+  assert.equal(r.actions.filter(a => a.type === 'swipe').length, 0);
 });
