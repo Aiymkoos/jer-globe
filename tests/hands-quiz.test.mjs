@@ -41,41 +41,10 @@ test('кулак у края кадра — подсказка перехват�
   assert.match(r.last.hint, /края/);
 });
 
-test('свёл и развёл большой с указательным — ближе, свёл — дальше', () => {
-  const e = new GlobeHands('drag');
-  // пальцы сведены (щипок), затем раствор растёт — поза уже «указатель»
-  let r = run(e, [
-    ...seq(3, () => ({ Left: h(POSE.PINCH, 0.3, 0.5, { pinch: 0.22 }), Right: none })),
-    ...seq(10, i => ({ Left: h(POSE.POINT, 0.3, 0.5, { pinch: 0.3 + i * 0.1 }), Right: none })),
-  ]);
-  const zin = r.actions.filter(a => a.type === 'zoom').reduce((s, a) => s + a.dz, 0);
-  assert.ok(zin > 1.5, String(zin));
-  r = run(e, seq(10, i => ({ Left: h(POSE.POINT, 0.3, 0.5, { pinch: 1.2 - i * 0.09 }), Right: none })));
-  assert.ok(r.actions.filter(a => a.type === 'zoom').reduce((s, a) => s + a.dz, 0) < -1);
-});
-
-test('раскрыл ладонь и замер — масштаб «отпущен», можно начать заново без отдаления', () => {
-  const e = new GlobeHands('drag');
-  run(e, [...seq(3, () => ({ Left: h(POSE.PINCH, 0.3, 0.5, { pinch: 0.2 }), Right: none })), ...seq(5, i => ({ Left: h(POSE.POINT, 0.3, 0.5, { pinch: 0.4 + i * 0.15 }), Right: none }))]);
-  const r = run(e, [...seq(40, () => ({ Left: h(POSE.PALM, 0.3, 0.5, { pinch: 1.3 }), Right: none })), ...seq(3, () => ({ Left: h(POSE.PINCH, 0.3, 0.5, { pinch: 0.2 }), Right: none }))]);
-  // ладонь замерла — масштаб отпущен; новый щипок не отдаляет глобус
-  assert.ok(r.actions.filter(a => a.type === 'zoom').every(a => a.dz > 0));
-});
-
 test('пальцы сведены и дрожат — масштаб не прыгает', () => {
   const e = new GlobeHands('drag');
   const r = run(e, seq(20, i => ({ Left: h(POSE.PINCH, 0.3, 0.5, { pinch: 0.22 + (i % 2) * 0.012 }), Right: none })));
   assert.equal(r.actions.filter(a => a.type === 'zoom').length, 0);
-});
-
-test('одна рука крутит, другая пальцами меняет масштаб — одновременно', () => {
-  const e = new GlobeHands('drag');
-  const r = run(e, [
-    ...seq(3, i => ({ Right: h(POSE.FIST, 0.6 + i * 0.01, 0.5), Left: h(POSE.PINCH, 0.3, 0.5, { pinch: 0.2 }) })),
-    ...seq(6, i => ({ Right: h(POSE.FIST, 0.63 + i * 0.01, 0.5), Left: h(POSE.POINT, 0.3, 0.5, { pinch: 0.3 + i * 0.12 }) })),
-  ]);
-  assert.ok(r.actions.some(a => a.type === 'rotate'));
-  assert.ok(r.actions.some(a => a.type === 'zoom' && a.dz > 0));
 });
 
 test('захват «липкий»: неясная поза на миг не роняет глобус, раскрытая ладонь отпускает', () => {
@@ -248,10 +217,9 @@ test('джойстик: кулак на миг распознан как щип�
   assert.ok(!r.actions.some(a => a.type === 'release' || a.type === 'zoom'), JSON.stringify(r.actions));
   assert.equal(e.grab.Right.ax, before);
   assert.ok(lastSpin(r).vx > 0.02, JSON.stringify(lastSpin(r)));
-  // а настоящий щипок (два кадра подряд) отпускает глобус и включает масштаб пальцами
+  // а настоящий щипок (два кадра подряд) отпускает глобус
   const r2 = run(e, seq(3, () => ({ Right: h(POSE.PINCH, 0.62, 0.5, { pinch: 0.2 }), Left: none })));
   assert.ok(r2.actions.some(a => a.type === 'release'));
-  assert.ok(e.spread.Right);
 });
 
 test('джойстик: камера на миг потеряла руку — центр помним; пропала надолго — отпускаем', () => {
@@ -382,18 +350,6 @@ test('две ладони: развести — приблизить, дрожа
   assert.equal(r.actions.filter(a => a.type === 'zoom').length, 0);
 });
 
-test('широко развёл пальцы (рука похожа на ладонь) — масштаб продолжается', () => {
-  const e = new GlobeHands('drag');
-  const r = run(e, [
-    ...seq(3, () => ({ Left: h(POSE.PINCH, 0.3, 0.5, { pinch: 0.2 }), Right: none })),
-    ...seq(4, i => ({ Left: h(POSE.OTHER, 0.3, 0.5, { pinch: 0.4 + i * 0.1 }), Right: none })),
-    ...seq(4, i => ({ Left: h(POSE.PALM, 0.3, 0.5, { pinch: 0.8 + i * 0.15 }), Right: none })),
-  ]);
-  const dz = r.actions.filter(a => a.type === 'zoom').reduce((s, a) => s + a.dz, 0);
-  assert.ok(dz > 2, String(dz));
-  assert.equal(r.actions.filter(a => a.type === 'swipe').length, 0);
-});
-
 test('в режиме с морем взмах в сторону меняет режим, а не уровень воды', () => {
   const e = new GlobeHands('drag');
   // взмах вправо, в начале рука чуть уходит вверх
@@ -415,4 +371,32 @@ test('после изменения уровня можно замереть и 
   ], { levelMode: true });
   assert.ok(r.actions.some(a => a.type === 'level'));
   assert.equal(r.actions.filter(a => a.type === 'swipe').length, 1);
+});
+
+test('щипок убран: сведённые и разведённые пальцы не меняют масштаб', () => {
+  const e = new GlobeHands('drag');
+  const r = run(e, [
+    ...seq(3, () => ({ Left: h(POSE.PINCH, 0.3, 0.5, { pinch: 0.2 }), Right: none })),
+    ...seq(10, i => ({ Left: h(POSE.POINT, 0.3, 0.5, { pinch: 0.3 + i * 0.1 }), Right: none })),
+  ]);
+  assert.equal(r.actions.filter(a => a.type === 'zoom').length, 0);
+  assert.ok(r.last.pointers.length === 1);
+});
+
+test('подержал ладонь подольше, потом взмахнул — режим меняется', () => {
+  const e = new GlobeHands('drag');
+  const r = run(e, [
+    ...seq(45, () => ({ Right: h(POSE.PALM, 0.4, 0.5), Left: none })),
+    ...seq(8, i => ({ Right: h(POSE.PALM, 0.4 + i * 0.03, 0.5), Left: none })),
+  ]);
+  assert.deepEqual(r.actions.filter(a => a.type === 'swipe'), [{ type: 'swipe', dir: 1 }]);
+});
+
+test('ладонь смазалась посреди быстрого взмаха — взмах всё равно засчитан', () => {
+  const e = new GlobeHands('drag');
+  const r = run(e, [
+    ...seq(20, () => ({ Right: h(POSE.PALM, 0.3, 0.5), Left: none })),
+    ...seq(7, i => ({ Right: h(i === 2 || i === 3 ? POSE.OTHER : POSE.PALM, 0.3 + i * 0.04, 0.5), Left: none })),
+  ]);
+  assert.deepEqual(r.actions.filter(a => a.type === 'swipe'), [{ type: 'swipe', dir: 1 }]);
 });

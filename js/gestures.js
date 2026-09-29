@@ -72,7 +72,7 @@ export function pinchRatio(lm, world) {
  * lm — 21 точка (экран или кадр), world — те же точки в 3D.
  * pinched — был ли щипок на прошлом кадре (для гистерезиса).
  */
-export function classifyHand(lm, world = null, pinched = false) {
+export function classifyHand(lm, world = null, pinched = false, { pinch = true } = {}) {
   const st = fingerStates(lm, world);
   const [index, ...others] = st;
   const nExt = st.filter(s => s === 'ext').length;
@@ -81,7 +81,7 @@ export function classifyHand(lm, world = null, pinched = false) {
   const namesWhere = test => FINGERS.filter((_, i) => test(st[i], i)).map(f => f.name);
 
   // Щипок проверяем первым: при нём указательный согнут к большому.
-  if (pr < (pinched ? PINCH_OFF : PINCH_ON) && nExt < 4) return { pose: POSE.PINCH, pinch: pr };
+  if (pinch && pr < (pinched ? PINCH_OFF : PINCH_ON) && nExt < 4) return { pose: POSE.PINCH, pinch: pr };
   if (nExt === 4 || (nExt === 3 && nCurl === 0)) return { pose: POSE.PALM, pinch: pr };
   if (index === 'ext' && others.every(s => s !== 'ext') && others.filter(s => s === 'curl').length >= 2) {
     return { pose: POSE.POINT, pinch: pr };
@@ -89,7 +89,7 @@ export function classifyHand(lm, world = null, pinched = false) {
   if (nExt === 0 && nCurl >= 3) return { pose: POSE.FIST, pinch: pr };
 
   // Почти-позы: что именно исправить.
-  if (pr < PINCH_OFF + 0.15) return { pose: POSE.OTHER, near: POSE.PINCH, pinch: pr, hint: 'Сведи большой и указательный пальцы плотнее — до касания' };
+  if (pinch && pr < PINCH_OFF + 0.15) return { pose: POSE.OTHER, near: POSE.PINCH, pinch: pr, hint: 'Сведи большой и указательный пальцы плотнее — до касания' };
   if (index === 'ext') {
     return { pose: POSE.OTHER, near: POSE.POINT, pinch: pr, hint: `Для указки согни ${list(namesWhere((s, i) => i > 0 && s !== 'curl'))}` };
   }

@@ -2,7 +2,6 @@
 //   кулак — «джойстик»: где сжал — там центр; сдвинул кулак — глобус плавно едет туда,
 //     чем дальше от центра, тем быстрее; вернул к центру — стоп (рука не уезжает к краю кадра)
 //   (режим «перетаскивание»: кулак схватил и тащит, раскрыл ладонь — крутится по инерции)
-//   большой + указательный: свёл, затем развёл — ближе, свёл — дальше (как на телефоне)
 //   два кулака или две ладони — развести/свести руки: масштаб
 //   ладонь — взмах в сторону: сменить режим (только одной рукой, уже какое-то время в кадре);
 //     в режимах с морем — вверх/вниз уровень воды
@@ -11,14 +10,15 @@
 import { POSE } from './gestures.js';
 
 export const T = {
-  SWIPE_DX: 0.2,
+  SWIPE_DX: 0.16,
   SWIPE_MAX_MS: 750,
   SWIPE_MIN_MS: 90,
   SWIPE_COOLDOWN: 1200,
-  SWIPE_ARM_MS: 300,
+  SWIPE_ARM_MS: 250,
+  PALM_GRACE_MS: 250, // ладонь смазалась на быстром взмахе и на миг не распознана — взмах продолжается
   AXIS_LOCK: 0.04,    // сдвиг ладони, после которого решаем: взмах в сторону или уровень моря
   LEVEL_IDLE_MS: 500, // ладонь замерла столько — жест «уровень моря» закончен  // ладонь должна продержаться столько, прежде чем взмах засчитается
-  SWIPE_SETTLE_MS: 600, // рука только появилась или ушла вторая — взмахи не считаем
+  SWIPE_SETTLE_MS: 400, // рука только появилась или ушла вторая — взмахи не считаем
   ZOOM_DEAD: 0.03,    // двуручный масштаб: изменение расстояния меньше (log2) — дрожание
   SPREAD_IDLE_MS: 700, // масштаб пальцами: ладонь/указатель без движения столько — масштаб отпущен
   FAST: 3,            // долей кадра в секунду — «крутишь слишком резко»
@@ -90,6 +90,8 @@ export class GlobeHands {
     this.spin = null;    // текущая скорость джойстика
     this.seen = {};      // когда рука появилась в кадре
     this.calmUntil = 0;  // до этого времени взмахи ладонью не считаем
+    this.palmSince = {}; // с какого момента рука держит ладонь (короткие сбои не считаем)
+    this.palmLast = {};  // когда ладонь видели последний раз
   }
 
   /**
@@ -104,6 +106,11 @@ export class GlobeHands {
     for (const [key] of list) this.seen[key] ??= now;
     for (const key of Object.keys(this.seen)) if (!hands[key]?.present) delete this.seen[key];
     if (list.length === 2) this.calmUntil = now + T.SWIPE_SETTLE_MS;
+    for (const [key, h] of list) {
+      if (h.pose === POSE.PALM) { this.palmSince[key] ??= now; this.palmLast[key] = now; }
+      else if (now - (this.palmLast[key] ?? -Infinity) > T.PALM_GRACE_MS) delete this.palmSince[key];
+    }
+    for (const key of Object.keys(this.palmSince)) if (!hands[key]?.present) { delete this.palmSince[key]; delete this.palmLast[key]; }
     // Долго не было кадров (вкладка скрыта) — старый захват не продолжаем.
     if (this.lastT != null && now - this.lastT > T.STALE_MS) {
       this.pose = {}; this.poseSince = {}; this.palm = {}; this.grab = {}; this.spread = {};
@@ -225,35 +232,14 @@ export class GlobeHands {
       }
     }
 
-    // Масштаб пальцами: свёл большой и указательный — «зацепил», разводишь — ближе.
-    for (const [key, h] of list) {
-      if (this.grab[key]) continue;
-      if (h.pose === POSE.PINCH && Number.isFinite(h.pinch) && !this.spread[key]) this.spread[key] = { r: Math.max(.08, h.pinch), idle: now, started: now };
-      const sp = this.spread[key];
-      if (!sp) continue;
-      // Раскрыл ладонь или сжал кулак — «отпустил» масштаб. Палец замер на 2 с — снова указатель.
-      // Широко развёл пальцы — рука похожа на ладонь, но это ещё масштаб: отпускаем, только когда замерла.
-      if (h.pose === POSE.FIST || !Number.isFinite(h.pinch) || ((h.pose === POSE.PALM || h.pose === POSE.POINT) && now - sp.idle > T.SPREAD_IDLE_MS)) {
-        delete this.spread[key];
-        continue;
-      }
-      const r = sp.r + (Math.max(.08, h.pinch) - sp.r) * 0.5;
-      if (Math.abs(r - sp.r) > T.SPREAD_DEAD) {
-        act({ type: 'zoom', dz: Math.log2(r / sp.r) * T.SPREAD_ZOOM });
-        sp.r = r;
-        sp.idle = now;
-      }
-      if (now - sp.idle > 1500 && now - sp.started > 1500) {
-        out.hint ??= 'Разведи большой и указательный пальцы — глобус приблизится. Раскрой ладонь, чтобы начать заново';
-      } else out.hint ??= 'Разводи пальцы — ближе, своди — дальше. Раскрой ладонь — начать заново';
-    }
-
     // Остальные руки: ладонь, палец, подсказки.
     for (const [key, h] of list) {
       if (this.grab[key] || this.spread[key]) continue;
-      if (h.pose === POSE.PALM && grabbers.length === 0) {
+      // Ладонь — или ладонь, на миг смазанная посреди взмаха.
+      const palmish = h.pose === POSE.PALM || (this.palmSince[key] != null && this.swipe?.key === key && h.pose !== POSE.FIST);
+      if (palmish && grabbers.length === 0) {
         if (list.length === 2) continue; // две ладони — это масштаб, не взмах
-        if (now < this.calmUntil || now - this.seen[key] < T.SWIPE_SETTLE_MS || now - this.poseSince[key] < T.SWIPE_ARM_MS) {
+        if (now < this.calmUntil || now - this.seen[key] < T.SWIPE_SETTLE_MS || now - this.palmSince[key] < T.SWIPE_ARM_MS) {
           this.swipe = null;
           out.hint ??= 'Ладонь — взмах вправо или влево: сменить режим';
           continue;
@@ -266,7 +252,7 @@ export class GlobeHands {
         out.kind = 'error';
       }
     }
-    if (!list.some(([k, h]) => h.pose === POSE.PALM && !this.grab[k])) this.swipe = null;
+    if (!list.some(([k]) => this.palmSince[k] != null && !this.grab[k])) this.swipe = null;
 
     if (!list.length) out.hint = 'Подними руку перед камерой: кулак — крутить, две ладони — масштаб';
     out.hint ??= 'Кулак — крутить · две ладони развести — масштаб · палец — страна · взмах ладонью — режим';
@@ -285,6 +271,7 @@ export class GlobeHands {
     // иначе горизонтальный взмах, чуть ушедший вверх в начале, менял уровень моря.
     if (!g.axis) {
       if (Math.hypot(dx, dy) < T.AXIS_LOCK) {
+        g.t = now; // ладонь ещё стоит — время взмаха считаем с начала движения, а не с появления ладони
         out.hint ??= ctx.levelMode ? 'Ладонь: вверх-вниз — уровень моря, взмах в сторону — другой режим' : 'Ладонь — взмах вправо или влево: сменить режим';
         return;
       }

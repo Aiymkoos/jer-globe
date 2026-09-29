@@ -234,8 +234,8 @@ function handsFrom(res) {
   rawHands = [];
   list.forEach((h, i) => {
     const key = keys[i];
-    const prevPinch = engine.pose[key] === POSE.PINCH;
-    const cls = classifyHand(h.px, h.world, prevPinch);
+    // Щипок в Жер не используем: камера путала его с указателем.
+    const cls = classifyHand(h.px, h.world, false, { pinch: false });
     filters[key] ??= { x: new OneEuro(1.4, 4), y: new OneEuro(1.4, 4) };
     const s = toScreen(h.tip);
     out[key] = { present: true, ...cls, palm: h.palm, tip: { x: filters[key].x.filter(s.x, t), y: filters[key].y.filter(s.y, t) } };
@@ -419,7 +419,7 @@ async function startCamera() {
     $('cameraToggle').textContent = 'Выключить камеру';
     $('camEmpty').hidden = true;
     $('start').hidden = true;
-    hint('Сожми кулак и веди — глобус крутится. Сведи и разведи большой и указательный — масштаб', 'info', 3000);
+    hint('Сожми кулак и веди — глобус крутится. Две ладони развести — масштаб', 'info', 3000);
   } catch (e) {
     console.error(e);
     video.srcObject?.getTracks().forEach(t => t.stop());
