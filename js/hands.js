@@ -1,5 +1,7 @@
 // Две руки → действия с глобусом. Собственная логика, без DOM и карты — покрыта тестами.
-//   кулак — схватить и крутить; раскрыл ладонь — глобус крутится дальше по инерции
+//   кулак — «джойстик»: где сжал — там центр; сдвинул кулак — глобус плавно едет туда,
+//     чем дальше от центра, тем быстрее; вернул к центру — стоп (рука не уезжает к краю кадра)
+//   (режим «перетаскивание»: кулак схватил и тащит, раскрыл ладонь — крутится по инерции)
 //   большой + указательный: свёл, затем развёл — ближе, свёл — дальше (как на телефоне)
 //   два кулака — развести/свести руки: масштаб
 //   ладонь — взмах в сторону: сменить режим; в режимах с морем — вверх/вниз уровень воды
@@ -22,7 +24,19 @@ export const T = {
   LEVEL_GAIN: 260,    // метров уровня моря на всю высоту кадра
   CLOSE_HANDS: 0.12,  // руки ближе — масштаб двумя руками неточный
   RELEASE_FRAMES: 2,  // столько кадров раскрытой руки — глобус отпущен
+  JOY_DEAD: 0.035,    // джойстик: сдвиг кулака меньше — глобус стоит
+  JOY_RANGE: 0.16,    // сдвиг, при котором скорость максимальна
+  JOY_MAX: 0.9,       // максимальная скорость, долей экрана в секунду
 };
+
+// Скорость джойстика: мягкий старт у центра, точное управление малыми сдвигами.
+export function joySpeed(off) {
+  const d = Math.hypot(off.x, off.y);
+  if (d <= T.JOY_DEAD) return { vx: 0, vy: 0, k: 0 };
+  const k = Math.min(1, (d - T.JOY_DEAD) / (T.JOY_RANGE - T.JOY_DEAD));
+  const v = T.JOY_MAX * k ** 1.6;
+  return { vx: (off.x / d) * v, vy: (off.y / d) * v, k };
+}
 
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -48,7 +62,8 @@ export function assignHands(palms, lastPos, now) {
 }
 
 export class GlobeHands {
-  constructor() {
+  constructor(style = 'joystick') {
+    this.style = style;  // 'joystick' | 'drag'
     this.pose = {};      // текущая поза каждой руки
     this.poseSince = {};
     this.palm = {};      // сглаженное положение ладони: { x, y, t }
@@ -58,6 +73,7 @@ export class GlobeHands {
     this.twoDist = null;
     this.swipe = null;
     this.cooldown = 0;
+    this.spin = null;    // текущая скорость джойстика
   }
 
   /**
@@ -65,7 +81,7 @@ export class GlobeHands {
    * ctx: { levelMode } — в режимах с уровнем моря ладонь вверх/вниз меняет уровень.
    */
   update(hands, now, ctx = {}) {
-    const out = { actions: [], hint: null, kind: 'info', pointers: [] };
+    const out = { actions: [], hint: null, kind: 'info', pointers: [], joy: null };
     const act = a => out.actions.push(a);
     const list = Object.entries(hands).filter(([, h]) => h?.present);
     const moves = {};
@@ -85,7 +101,10 @@ export class GlobeHands {
 
     // Захват «липкий»: кулак хватает, отпускает только раскрытая ладонь или палец-указатель.
     for (const [key, h] of list) {
-      if (h.pose === POSE.FIST && !this.spread[key]) this.grab[key] = { open: 0 };
+      if (h.pose === POSE.FIST && !this.spread[key]) {
+        if (this.grab[key]) this.grab[key].open = 0;
+        else this.grab[key] = { open: 0, ax: this.palm[key].x, ay: this.palm[key].y };
+      }
       else if (this.grab[key]) {
         if (h.pose === POSE.PALM || h.pose === POSE.POINT || h.pose === POSE.PINCH) {
           if (++this.grab[key].open >= T.RELEASE_FRAMES || h.pose === POSE.PINCH) delete this.grab[key];
@@ -96,7 +115,10 @@ export class GlobeHands {
 
     // Отпустил глобус — пусть крутится дальше по инерции.
     if (wasGrabbing && grabbers.length === 0) {
-      if (this.vel.length) {
+      if (this.spin) {
+        if (this.spin.vx || this.spin.vy) act({ type: 'release', vx: this.spin.vx * 0.6, vy: this.spin.vy * 0.6 });
+        this.spin = null;
+      } else if (this.vel.length) {
         const n = this.vel.length;
         act({ type: 'release', vx: this.vel.reduce((s, v) => s + v.vx, 0) / n, vy: this.vel.reduce((s, v) => s + v.vy, 0) / n });
       }
@@ -115,9 +137,24 @@ export class GlobeHands {
       } else out.hint = 'Две руки: разводи — приблизить, своди — отдалить';
       this.twoDist = d;
       this.vel = [];
+      this.spin = null;
+      for (const k of grabbers) { this.grab[k].ax = this.palm[k].x; this.grab[k].ay = this.palm[k].y; }
     } else {
       this.twoDist = null;
-      if (grabbers.length === 1) {
+      if (grabbers.length === 1 && this.style === 'joystick') {
+        const key = grabbers[0], g = this.grab[key], p = this.palm[key];
+        const off = { x: p.x - g.ax, y: p.y - g.ay };
+        const s = joySpeed(off);
+        this.spin = { vx: s.vx, vy: s.vy };
+        if (s.k > 0) act({ type: 'spin', vx: s.vx, vy: s.vy });
+        out.joy = { key, ax: g.ax, ay: g.ay, x: p.x, y: p.y, k: s.k };
+        const d = Math.hypot(off.x, off.y);
+        if (d > T.JOY_RANGE * 1.8) {
+          out.hint = 'Кулак слишком далеко от центра — глобус и так на полной скорости. Раскрой ладонь, чтобы начать заново';
+          out.kind = 'error';
+        } else if (s.k > 0) out.hint = 'Глобус едет за кулаком. Верни кулак в кружок — стоп, раскрой ладонь — отпустить';
+        else out.hint = 'Держишь глобус. Сдвинь кулак чуть в сторону — поедет туда, чем дальше, тем быстрее';
+      } else if (grabbers.length === 1) {
         const key = grabbers[0];
         const m = moves[key];
         if (m && Math.hypot(m.dx, m.dy) > T.DEAD) {

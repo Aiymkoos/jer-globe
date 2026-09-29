@@ -101,3 +101,6 @@ dd { margin: 0; }
   .camera { width: 150px; }
   .hint { max-width: calc(100vw - 190px); left: auto; right: 12px; transform: none; min-width: 0; }
 }
+
+.rot-style { position: absolute; top: 6px; right: 6px; font: 600 11px Manrope, sans-serif; color: #fff; background: #0009; border: 1px solid #fff4; border-radius: 999px; padding: 4px 9px; cursor: pointer; }
+.rot-style.aim { outline: 2px solid #6fd6ff; }

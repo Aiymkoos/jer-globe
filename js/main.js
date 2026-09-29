@@ -2,7 +2,7 @@
 // Без камеры глобус крутится мышью, режимы переключаются кнопками и цифрами 1–7.
 
 import { createGlobe, applyMode, setLevel, countryAt, onGlobe, setFlag, MODES, LEVEL_RANGE } from './globe.js';
-import { GlobeHands, assignHands } from './hands.js';
+import { GlobeHands, assignHands, T } from './hands.js';
 import { classifyHand, POSE, POSE_NAMES } from './gestures.js';
 import { Quiz } from './quiz.js';
 import { fetchQuakes, fetchIss, countryAtLngLat, timeAgo } from './live.js';
@@ -30,7 +30,20 @@ const state = {
 let globe = null;
 let map = null;
 let tracker = null;
-const engine = new GlobeHands();
+let rotStyle = 'joystick';
+try { rotStyle = new URLSearchParams(location.search).has('drag') || localStorage.getItem('jer-rot') === 'drag' ? 'drag' : 'joystick'; } catch {}
+const engine = new GlobeHands(rotStyle);
+function showRotStyle() {
+  $('rotStyle').textContent = engine.style === 'joystick' ? '✊ джойстик' : '✊ перетаскивание';
+}
+$('rotStyle').addEventListener('click', () => {
+  engine.style = engine.style === 'joystick' ? 'drag' : 'joystick';
+  engine.grab = {}; engine.spin = null; engine.vel = [];
+  try { localStorage.setItem('jer-rot', engine.style); } catch {}
+  showRotStyle();
+  hint(engine.style === 'joystick' ? 'Джойстик: сдвинь кулак — глобус едет туда, верни на место — стоп' : 'Перетаскивание: кулаком тащи глобус, раскрой ладонь — отпустить', 'info', 2500);
+});
+showRotStyle();
 const lastPos = {};
 const filters = {};
 let rawHands = [];
@@ -287,6 +300,24 @@ function drawHud() {
       ctx.fillText(p.country.name, p.x + 24, p.y - 14);
     }
   }
+  // Джойстик: кружок — где сжат кулак (там глобус стоит), стрелка — куда и как быстро едет.
+  const j = view.joy;
+  if (j) {
+    const ax = j.ax * innerWidth, ay = j.ay * innerHeight, x = j.x * innerWidth, y = j.y * innerHeight;
+    const r = T.JOY_DEAD * Math.min(innerWidth, innerHeight) * 1.4;
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+    ctx.setLineDash([5, 5]);
+    ctx.beginPath(); ctx.arc(ax, ay, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    if (j.k > 0) {
+      ctx.strokeStyle = `hsl(${190 - j.k * 150} 90% 65%)`;
+      ctx.lineWidth = 3 + j.k * 4;
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(x, y); ctx.stroke();
+    }
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fill();
+  }
   const c = $('handCanvas');
   if (c.width !== 320) { c.width = 320; c.height = 240; }
   const hc = c.getContext('2d');
@@ -319,7 +350,8 @@ function frame(now) {
     if (hands) {
       const out = engine.update(hands, now, { levelMode: ['flood', 'iceage'].includes(state.mode) });
       for (const a of out.actions) {
-        if (a.type === 'rotate') { state.inertia = null; map.panBy([-a.dx * innerWidth * ROTATE_GAIN, -a.dy * innerHeight * ROTATE_GAIN], { duration: 0 }); }
+        if (a.type === 'spin') { state.inertia = null; map.panBy([-a.vx * dt * innerWidth * ROTATE_GAIN, -a.vy * dt * innerHeight * ROTATE_GAIN], { duration: 0 }); }
+        else if (a.type === 'rotate') { state.inertia = null; map.panBy([-a.dx * innerWidth * ROTATE_GAIN, -a.dy * innerHeight * ROTATE_GAIN], { duration: 0 }); }
         else if (a.type === 'release') state.inertia = { vx: a.vx, vy: a.vy };
         else if (a.type === 'zoom') {
           const z = map.getZoom() + a.dz;
@@ -329,6 +361,7 @@ function frame(now) {
         else if (a.type === 'level') changeLevel(a.dv);
       }
       view.pointers = out.pointers.map(p => point(p, p.key, now));
+      view.joy = out.joy;
       for (const key of ['Left', 'Right']) if (!out.pointers.some(p => p.key === key) && state.hover[key]) { setFlag(map, state.hover[key].id, 'hover', false); state.hover[key] = null; state.dwell[key] = null; }
       hint(out.hint, out.kind);
     }
