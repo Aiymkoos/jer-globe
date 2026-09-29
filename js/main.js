@@ -38,7 +38,7 @@ function showRotStyle() {
 }
 $('rotStyle').addEventListener('click', () => {
   engine.style = engine.style === 'joystick' ? 'drag' : 'joystick';
-  engine.grab = {}; engine.spin = null; engine.vel = [];
+  engine.grab = {}; engine.spin = null; engine.vel = []; spinTarget = null;
   try { localStorage.setItem('jer-rot', engine.style); } catch {}
   showRotStyle();
   hint(engine.style === 'joystick' ? 'Джойстик: сдвинь кулак — глобус едет туда, верни на место — стоп' : 'Перетаскивание: кулаком тащи глобус, раскрой ладонь — отпустить', 'info', 2500);
@@ -335,11 +335,12 @@ function drawHud() {
 
 // ---------- главный цикл ----------
 const ROTATE_GAIN = 2; // небольшое движение руки заметно поворачивает глобус
+const SPIN_EASE = 0.09; // с, за сколько скорость джойстика догоняет руку (меньше — отзывчивее, больше — плавнее)
 let last = performance.now();
 let spinTarget = null, spin = { vx: 0, vy: 0 };
 function frame(now) {
   requestAnimationFrame(frame);
-  const dt = Math.min(0.05, (now - last) / 1000);
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000));
   last = now;
   if (!map) return;
 
@@ -373,9 +374,9 @@ function frame(now) {
 
   // Джойстик: скорость задаёт рука, а крутим каждый кадр экрана (60 раз в секунду),
   // а не только когда пришёл кадр камеры, — поэтому без рывков. Скорость меняется плавно.
-  if (spinTarget && now - spinTarget.t > 300) spinTarget = null; // рука пропала — стоп
+  if (spinTarget && now - spinTarget.t > T.LOST_MS) spinTarget = null; // рука пропала — стоп
   const tv = spinTarget ?? { vx: 0, vy: 0 };
-  const ease = 1 - Math.exp(-dt / 0.12);
+  const ease = 1 - Math.exp(-dt / SPIN_EASE);
   spin.vx += (tv.vx - spin.vx) * ease; spin.vy += (tv.vy - spin.vy) * ease;
   if (Math.hypot(spin.vx, spin.vy) > 0.002) map.panBy([-spin.vx * dt * innerWidth * ROTATE_GAIN, -spin.vy * dt * innerHeight * ROTATE_GAIN], { duration: 0 });
   else if (!spinTarget) spin.vx = spin.vy = 0;

@@ -224,3 +224,133 @@ test('джойстик: раскрыл ладонь — глобус мягко 
   const rel = r.actions.find(a => a.type === 'release');
   assert.ok(rel && rel.vx < 0, JSON.stringify(rel));
 });
+
+// ---------- джойстик: попытки «сломать» ----------
+// Кадры с явным временем: [t, hands]; шум — детерминированный.
+function runT(e, frames, ctx) {
+  const actions = [], outs = [];
+  for (const [t, hands] of frames) { const o = e.update(hands, t, ctx); outs.push(o); actions.push(...o.actions); }
+  return { actions, outs, last: outs[outs.length - 1] };
+}
+function noise(seed = 7) {
+  let r = seed;
+  return a => { r = (r * 16807) % 2147483647; return (r / 2147483647 - 0.5) * 2 * a; };
+}
+const fist = (x, y) => ({ Right: h(POSE.FIST, x, y), Left: none });
+const lastSpin = r => r.actions.filter(a => a.type === 'spin').at(-1);
+
+test('джойстик: кулак на миг распознан как щипок — центр не сбрасывается, глобус едет дальше', () => {
+  const e = new GlobeHands();
+  run(e, [...seq(3, () => fist(0.5, 0.5)), ...seq(20, () => fist(0.62, 0.5))]);
+  const before = e.grab.Right.ax;
+  const r = run(e, [{ Right: h(POSE.PINCH, 0.62, 0.5, { pinch: 0.25 }), Left: none }, ...seq(5, () => fist(0.62, 0.5))]);
+  assert.ok(!r.actions.some(a => a.type === 'release' || a.type === 'zoom'), JSON.stringify(r.actions));
+  assert.equal(e.grab.Right.ax, before);
+  assert.ok(lastSpin(r).vx > 0.02, JSON.stringify(lastSpin(r)));
+  // а настоящий щипок (два кадра подряд) отпускает глобус и включает масштаб пальцами
+  const r2 = run(e, seq(3, () => ({ Right: h(POSE.PINCH, 0.62, 0.5, { pinch: 0.2 }), Left: none })));
+  assert.ok(r2.actions.some(a => a.type === 'release'));
+  assert.ok(e.spread.Right);
+});
+
+test('джойстик: камера на миг потеряла руку — центр помним; пропала надолго — отпускаем', () => {
+  const e = new GlobeHands();
+  let t = 0;
+  const f = [];
+  for (let i = 0; i < 3; i++) f.push([t += 33, fist(0.5, 0.5)]);
+  for (let i = 0; i < 20; i++) f.push([t += 33, fist(0.62, 0.5)]);
+  for (let i = 0; i < 4; i++) f.push([t += 50, { Left: none, Right: none }]); // 200 мс без руки
+  for (let i = 0; i < 3; i++) f.push([t += 33, fist(0.62, 0.5)]);
+  const r = runT(e, f);
+  assert.ok(!r.actions.some(a => a.type === 'release'), 'короткая потеря не должна отпускать');
+  assert.ok(Math.abs(e.grab.Right.ax - 0.5) < 1e-9);
+  assert.ok(lastSpin(r).vx > 0.02);
+  assert.equal(r.outs[r.outs.length - 4].joy, null); // пока руки нет — кружок не рисуем
+  const r2 = runT(e, seq(10, i => [t + 33 * (i + 1), { Left: none, Right: none }]));
+  assert.equal(r2.actions.filter(a => a.type === 'release').length, 1);
+  assert.deepEqual(e.grab, {});
+});
+
+test('джойстик в режиме перетаскивания: потеря руки отпускает сразу, как раньше', () => {
+  const e = new GlobeHands('drag');
+  const r = run(e, [...seq(6, i => fist(0.5 + i * 0.02, 0.5)), { Left: none, Right: none }]);
+  assert.ok(r.actions.some(a => a.type === 'release'));
+});
+
+test('джойстик: вкладку свернули и вернулись — старый центр не действует', () => {
+  const e = new GlobeHands();
+  runT(e, [...seq(3, i => [i * 33, fist(0.3, 0.5)])]);
+  const r = runT(e, seq(5, i => [5000 + i * 33, fist(0.7, 0.5)]));
+  assert.ok(Math.abs(e.grab.Right.ax - 0.7) < 1e-9);
+  assert.ok(r.actions.every(a => a.type !== 'spin' || (a.vx === 0 && a.vy === 0)));
+  assert.ok(!r.actions.some(a => a.type === 'release'));
+});
+
+test('вторая рука вошла в кадр с другой стороны — захват остаётся у кулака', () => {
+  const last = {};
+  // одна рука (кулак) — «правая», уехала на левую половину кадра
+  assignHands([{ x: 0.6, y: 0.5 }], last, 0);
+  assignHands([{ x: 0.35, y: 0.5 }], last, 33);
+  // справа появилась вторая рука
+  assert.deepEqual(assignHands([{ x: 0.36, y: 0.5 }, { x: 0.8, y: 0.5 }], last, 66), ['Right', 'Left']);
+  assert.deepEqual(assignHands([{ x: 0.8, y: 0.5 }, { x: 0.36, y: 0.5 }], last, 99), ['Left', 'Right']);
+});
+
+test('два кулака сошлись вплотную, потом развелись — масштаб без скачка', () => {
+  const e = new GlobeHands();
+  const r = run(e, [
+    ...seq(3, () => ({ Left: h(POSE.FIST, 0.499, 0.5), Right: h(POSE.FIST, 0.501, 0.5) })),
+    ...seq(3, () => ({ Left: h(POSE.FIST, 0.35, 0.5), Right: h(POSE.FIST, 0.65, 0.5) })),
+  ]);
+  const zooms = r.actions.filter(a => a.type === 'zoom');
+  assert.ok(zooms.every(a => Number.isFinite(a.dz) && Math.abs(a.dz) < 1.5), JSON.stringify(zooms));
+});
+
+test('джойстик: второй кулак останавливает глобус, после масштаба один кулак не дёргает', () => {
+  const e = new GlobeHands();
+  let r = run(e, [...seq(3, () => fist(0.6, 0.5)), ...seq(10, () => fist(0.75, 0.5))]);
+  assert.ok(lastSpin(r).vx > 0);
+  r = run(e, seq(5, i => ({ Right: h(POSE.FIST, 0.75 + i * 0.02, 0.5), Left: h(POSE.FIST, 0.3 - i * 0.02, 0.5) })));
+  assert.deepEqual(r.actions.find(a => a.type === 'spin'), { type: 'spin', vx: 0, vy: 0 });
+  // левая раскрылась — правый кулак остаётся джойстиком с центром там, где он сейчас
+  r = run(e, seq(4, () => ({ Right: h(POSE.FIST, 0.83, 0.5), Left: h(POSE.PALM, 0.22, 0.5) })));
+  assert.ok(r.actions.filter(a => a.type === 'spin').every(a => Math.hypot(a.vx, a.vy) < 0.01));
+});
+
+test('джойстик: кулак вниз — глобус едет вниз, как и при перетаскивании (подсказка викторины верна)', () => {
+  const j = run(new GlobeHands(), [...seq(3, () => fist(0.5, 0.4)), ...seq(15, () => fist(0.5, 0.55))]);
+  const d = run(new GlobeHands('drag'), seq(10, i => fist(0.5, 0.4 + i * 0.015)));
+  assert.ok(lastSpin(j).vy > 0 && Math.abs(lastSpin(j).vx) < 1e-9);
+  assert.ok(d.actions.filter(a => a.type === 'rotate').every(a => a.dy > 0));
+});
+
+test('джойстик с шумом и пропусками кадров: у центра стоит, в стороне едет ровно, без NaN', () => {
+  const n = noise();
+  const e = new GlobeHands();
+  let t = 0;
+  const f = [];
+  // шум распознавания ±0.008 кадра, камера то 30, то 15 кадров/с, иногда рука пропадает на кадр
+  for (let i = 0; i < 90; i++) {
+    t += i % 7 === 0 ? 66 : 33;
+    const x = i < 40 ? 0.5 : 0.63;
+    f.push([t, i % 23 === 11 ? { Left: none, Right: none } : fist(x + n(0.008), 0.5 + n(0.008))]);
+  }
+  const r = runT(e, f);
+  assert.ok(!r.actions.some(a => a.type === 'release'));
+  const spins = r.actions.filter(a => a.type === 'spin');
+  assert.ok(spins.every(a => Number.isFinite(a.vx) && Number.isFinite(a.vy)));
+  const early = spins.slice(3, 35), late = spins.slice(-25);
+  assert.ok(early.every(a => Math.hypot(a.vx, a.vy) < 0.005), 'у центра дрожание не крутит');
+  const vs = late.map(a => a.vx), mean = vs.reduce((s, v) => s + v, 0) / vs.length;
+  const sd = Math.sqrt(vs.reduce((s, v) => s + (v - mean) ** 2, 0) / vs.length);
+  assert.ok(mean > 0.03 && sd < mean * 0.25, `mean ${mean} sd ${sd}`);
+  assert.ok(late.every(a => Math.abs(a.vy) < Math.abs(a.vx)));
+});
+
+test('джойстик откликается быстрее: сдвиг кулака почти сразу даёт скорость', () => {
+  const e = new GlobeHands();
+  const r = run(e, [...seq(3, () => fist(0.5, 0.5)), ...seq(4, () => fist(0.62, 0.5))]);
+  const target = joySpeed({ x: 0.12, y: 0 }).vx;
+  // через 3 кадра камеры (≈0,1 с) скорость уже почти полная
+  assert.ok(lastSpin(r).vx > target * 0.9, `${lastSpin(r).vx} / ${target}`);
+});

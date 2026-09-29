@@ -27,6 +27,9 @@ export const T = {
   JOY_DEAD: 0.045,    // джойстик: сдвиг кулака меньше — глобус стоит
   JOY_RANGE: 0.22,    // сдвиг, при котором скорость максимальна
   JOY_MAX: 0.45,      // максимальная скорость, долей экрана в секунду
+  JOY_SMOOTH: 0.2,    // джойстик сглаживает руку слабее: дрожание гасит мёртвая зона — меньше задержка
+  LOST_MS: 300,       // джойстик: рука пропала на столько — центр кулака помним
+  STALE_MS: 1000,     // кадров не было дольше (вкладка скрыта) — всё начинаем заново
 };
 
 // Скорость джойстика: мягкий старт у центра, точное управление малыми сдвигами.
@@ -55,6 +58,10 @@ export function assignHands(palms, lastPos, now) {
       const keep = dist(lastPos.Left, a) + dist(lastPos.Right, b);
       const swap = dist(lastPos.Right, a) + dist(lastPos.Left, b);
       keys = keep <= swap ? ['Left', 'Right'] : ['Right', 'Left'];
+    } else if (recent('Left') || recent('Right')) {
+      // В кадр вошла вторая рука — «слот» остаётся у той, что уже была (иначе захват перескочит на новую).
+      const k = recent('Left') ? 'Left' : 'Right', o = k === 'Left' ? 'Right' : 'Left';
+      keys = dist(lastPos[k], a) <= dist(lastPos[k], b) ? [k, o] : [o, k];
     } else keys = a.x <= b.x ? ['Left', 'Right'] : ['Right', 'Left'];
   } else keys = [];
   palms.forEach((p, i) => { lastPos[keys[i]] = { x: p.x, y: p.y, t: now }; });
@@ -85,18 +92,29 @@ export class GlobeHands {
     const act = a => out.actions.push(a);
     const list = Object.entries(hands).filter(([, h]) => h?.present);
     const moves = {};
+    // Долго не было кадров (вкладка скрыта) — старый захват не продолжаем.
+    if (this.lastT != null && now - this.lastT > T.STALE_MS) {
+      this.pose = {}; this.poseSince = {}; this.palm = {}; this.grab = {}; this.spread = {};
+      this.vel = []; this.twoDist = null; this.swipe = null; this.spin = null; this.cooldown = 0;
+    }
+    this.lastT = now;
 
     // Позы, сглаженные ладони и сколько сдвинулась каждая рука.
     for (const [key, h] of list) {
       if (h.pose !== this.pose[key]) { this.pose[key] = h.pose; this.poseSince[key] = now; }
       const prev = this.palm[key];
-      const s = prev ? { x: prev.x + (h.palm.x - prev.x) * (1 - T.SMOOTH), y: prev.y + (h.palm.y - prev.y) * (1 - T.SMOOTH), t: now } : { ...h.palm, t: now };
+      const a = 1 - (this.style === 'joystick' && this.grab[key] ? T.JOY_SMOOTH : T.SMOOTH);
+      const s = prev ? { x: prev.x + (h.palm.x - prev.x) * a, y: prev.y + (h.palm.y - prev.y) * a, t: now } : { ...h.palm, t: now };
       if (prev) moves[key] = { dx: s.x - prev.x, dy: s.y - prev.y, dt: Math.max(0.001, (now - prev.t) / 1000) };
       this.palm[key] = s;
     }
     const wasGrabbing = Object.keys(this.grab).length > 0;
-    for (const key of Object.keys(this.pose)) {
-      if (!hands[key]?.present) { delete this.pose[key]; delete this.palm[key]; delete this.grab[key]; delete this.spread[key]; }
+    for (const key of new Set([...Object.keys(this.pose), ...Object.keys(this.grab)])) {
+      if (hands[key]?.present) continue;
+      delete this.pose[key]; delete this.palm[key]; delete this.spread[key];
+      // Джойстик: камера на миг потеряла руку — центр кулака помним, иначе глобус «сбросится» и встанет.
+      const g = this.grab[key];
+      if (g && (this.style !== 'joystick' || now - g.seen > T.LOST_MS)) delete this.grab[key];
     }
 
     // Захват «липкий»: кулак хватает, отпускает только раскрытая ладонь или палец-указатель.
@@ -106,15 +124,17 @@ export class GlobeHands {
         else this.grab[key] = { open: 0, ax: this.palm[key].x, ay: this.palm[key].y };
       }
       else if (this.grab[key]) {
+        // Щипок тоже отпускает не с одного кадра: сжатый кулак иногда на миг распознаётся как щипок.
         if (h.pose === POSE.PALM || h.pose === POSE.POINT || h.pose === POSE.PINCH) {
-          if (++this.grab[key].open >= T.RELEASE_FRAMES || h.pose === POSE.PINCH) delete this.grab[key];
+          if (++this.grab[key].open >= T.RELEASE_FRAMES) delete this.grab[key];
         } else this.grab[key].open = 0;
       }
+      if (this.grab[key]) this.grab[key].seen = now;
     }
     const grabbers = Object.keys(this.grab).filter(k => hands[k]?.present);
 
     // Отпустил глобус — пусть крутится дальше по инерции.
-    if (wasGrabbing && grabbers.length === 0) {
+    if (wasGrabbing && !Object.keys(this.grab).length) {
       if (this.spin) {
         if (this.spin.vx || this.spin.vy) act({ type: 'release', vx: this.spin.vx * 0.6, vy: this.spin.vy * 0.6 });
         this.spin = null;
@@ -127,16 +147,18 @@ export class GlobeHands {
 
     if (grabbers.length === 2) {
       // Масштаб двумя руками.
-      const d = dist(this.palm[grabbers[0]], this.palm[grabbers[1]]);
+      let d = dist(this.palm[grabbers[0]], this.palm[grabbers[1]]);
       if (d < T.CLOSE_HANDS) {
         out.hint = 'Руки слишком близко — разведи их шире, чтобы менять масштаб';
         out.kind = 'error';
+        d = null; // руки сошлись — масштаб не считаем от этого расстояния, иначе потом скачок
       } else if (this.twoDist) {
         act({ type: 'zoom', dz: Math.log2(d / this.twoDist) * T.TWO_HAND_ZOOM });
         out.hint = 'Разводи руки — ближе, своди — дальше';
       } else out.hint = 'Две руки: разводи — приблизить, своди — отдалить';
       this.twoDist = d;
       this.vel = [];
+      if (this.spin) act({ type: 'spin', vx: 0, vy: 0 }); // второй кулак — глобус перестаёт ехать
       this.spin = null;
       for (const k of grabbers) { this.grab[k].ax = this.palm[k].x; this.grab[k].ay = this.palm[k].y; }
     } else {
