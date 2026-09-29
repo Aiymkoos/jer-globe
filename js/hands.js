@@ -1,7 +1,7 @@
 // Две руки → действия с глобусом. Собственная логика, без DOM и карты — покрыта тестами.
-//   кулак — схватить и крутить; разжать — глобус крутится по инерции
+//   кулак — схватить и крутить; раскрыл ладонь — глобус крутится дальше по инерции
+//   большой + указательный: свёл, затем развёл — ближе, свёл — дальше (как на телефоне)
 //   два кулака — развести/свести руки: масштаб
-//   щипок (большой + указательный) — вверх ближе, вниз дальше
 //   ладонь — взмах в сторону: сменить режим; в режимах с морем — вверх/вниз уровень воды
 //   указательный палец — указатель: страна, кнопки
 
@@ -12,12 +12,16 @@ export const T = {
   SWIPE_MAX_MS: 750,
   SWIPE_MIN_MS: 90,
   SWIPE_COOLDOWN: 900,
-  FAST: 2.4,          // долей кадра в секунду — «крутишь слишком резко»
-  EDGE: 0.05,         // доля кадра у края
-  PINCH_ZOOM: 5,      // уровней масштаба на всю высоту кадра
+  FAST: 3,            // долей кадра в секунду — «крутишь слишком резко»
+  EDGE: 0.04,         // доля кадра у края
+  DEAD: 0.0015,       // движения меньше — дрожание руки, глобус не трогаем
+  SMOOTH: 0.45,       // сглаживание положения ладони (0 — нет, 1 — стоит на месте)
+  SPREAD_ZOOM: 1.7,   // уровней масштаба на каждое удвоение расстояния между пальцами
+  SPREAD_DEAD: 0.015, // изменение раствора пальцев меньше — дрожание
   TWO_HAND_ZOOM: 2.4, // уровней масштаба на удвоение расстояния между руками
   LEVEL_GAIN: 260,    // метров уровня моря на всю высоту кадра
   CLOSE_HANDS: 0.12,  // руки ближе — масштаб двумя руками неточный
+  RELEASE_FRAMES: 2,  // столько кадров раскрытой руки — глобус отпущен
 };
 
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -45,49 +49,63 @@ export function assignHands(palms, lastPos, now) {
 
 export class GlobeHands {
   constructor() {
-    this.prev = {};      // прошлое положение ладони каждой руки
+    this.pose = {};      // текущая поза каждой руки
     this.poseSince = {};
-    this.pose = {};
-    this.vel = [];       // последние движения при захвате — для инерции
+    this.palm = {};      // сглаженное положение ладони: { x, y, t }
+    this.grab = {};      // рука держит глобус: { open } — сколько кадров подряд раскрыта
+    this.spread = {};    // рука меняет масштаб пальцами: { r, idle }
+    this.vel = [];
     this.twoDist = null;
     this.swipe = null;
     this.cooldown = 0;
-    this.grabKey = null;
   }
 
   /**
-   * hands: { Left, Right } — { present, pose, near, hint, palm:{x,y}, tip:{x,y} } (доли кадра, отзеркалено).
+   * hands: { Left, Right } — { present, pose, near, hint, pinch, palm:{x,y}, tip:{x,y} } (доли кадра, отзеркалено).
    * ctx: { levelMode } — в режимах с уровнем моря ладонь вверх/вниз меняет уровень.
    */
   update(hands, now, ctx = {}) {
     const out = { actions: [], hint: null, kind: 'info', pointers: [] };
     const act = a => out.actions.push(a);
     const list = Object.entries(hands).filter(([, h]) => h?.present);
+    const moves = {};
 
+    // Позы, сглаженные ладони и сколько сдвинулась каждая рука.
     for (const [key, h] of list) {
       if (h.pose !== this.pose[key]) { this.pose[key] = h.pose; this.poseSince[key] = now; }
+      const prev = this.palm[key];
+      const s = prev ? { x: prev.x + (h.palm.x - prev.x) * (1 - T.SMOOTH), y: prev.y + (h.palm.y - prev.y) * (1 - T.SMOOTH), t: now } : { ...h.palm, t: now };
+      if (prev) moves[key] = { dx: s.x - prev.x, dy: s.y - prev.y, dt: Math.max(0.001, (now - prev.t) / 1000) };
+      this.palm[key] = s;
     }
-    for (const key of Object.keys(this.pose)) if (!hands[key]?.present) { delete this.pose[key]; delete this.prev[key]; }
+    const wasGrabbing = Object.keys(this.grab).length > 0;
+    for (const key of Object.keys(this.pose)) {
+      if (!hands[key]?.present) { delete this.pose[key]; delete this.palm[key]; delete this.grab[key]; delete this.spread[key]; }
+    }
 
-    const fists = list.filter(([, h]) => h.pose === POSE.FIST);
-    const moved = (key, h) => {
-      const p = this.prev[key];
-      return p ? { dx: h.palm.x - p.x, dy: h.palm.y - p.y, dt: Math.max(0.001, (now - p.t) / 1000) } : null;
-    };
+    // Захват «липкий»: кулак хватает, отпускает только раскрытая ладонь или палец-указатель.
+    for (const [key, h] of list) {
+      if (h.pose === POSE.FIST && !this.spread[key]) this.grab[key] = { open: 0 };
+      else if (this.grab[key]) {
+        if (h.pose === POSE.PALM || h.pose === POSE.POINT || h.pose === POSE.PINCH) {
+          if (++this.grab[key].open >= T.RELEASE_FRAMES || h.pose === POSE.PINCH) delete this.grab[key];
+        } else this.grab[key].open = 0;
+      }
+    }
+    const grabbers = Object.keys(this.grab).filter(k => hands[k]?.present);
 
     // Отпустил глобус — пусть крутится дальше по инерции.
-    if (this.grabKey && !(fists.length === 1 && fists[0][0] === this.grabKey)) {
-      if (this.vel.length && fists.length === 0) {
+    if (wasGrabbing && grabbers.length === 0) {
+      if (this.vel.length) {
         const n = this.vel.length;
         act({ type: 'release', vx: this.vel.reduce((s, v) => s + v.vx, 0) / n, vy: this.vel.reduce((s, v) => s + v.vy, 0) / n });
       }
-      this.grabKey = null;
       this.vel = [];
     }
 
-    if (fists.length === 2) {
+    if (grabbers.length === 2) {
       // Масштаб двумя руками.
-      const d = dist(fists[0][1].palm, fists[1][1].palm);
+      const d = dist(this.palm[grabbers[0]], this.palm[grabbers[1]]);
       if (d < T.CLOSE_HANDS) {
         out.hint = 'Руки слишком близко — разведи их шире, чтобы менять масштаб';
         out.kind = 'error';
@@ -96,51 +114,70 @@ export class GlobeHands {
         out.hint = 'Разводи руки — ближе, своди — дальше';
       } else out.hint = 'Две руки: разводи — приблизить, своди — отдалить';
       this.twoDist = d;
+      this.vel = [];
     } else {
       this.twoDist = null;
-      if (fists.length === 1) {
-        const [key, h] = fists[0];
-        const m = moved(key, h);
-        if (this.grabKey !== key) { this.grabKey = key; this.vel = []; }
-        if (m) {
+      if (grabbers.length === 1) {
+        const key = grabbers[0];
+        const m = moves[key];
+        if (m && Math.hypot(m.dx, m.dy) > T.DEAD) {
           const speed = Math.hypot(m.dx, m.dy) / m.dt;
           const k = speed > T.FAST ? T.FAST / speed : 1; // слишком резко — ограничиваем
           act({ type: 'rotate', dx: m.dx * k, dy: m.dy * k });
           this.vel.push({ vx: (m.dx * k) / m.dt, vy: (m.dy * k) / m.dt, t: now });
-          this.vel = this.vel.filter(v => now - v.t < 120);
           if (speed > T.FAST) { out.hint = 'Крути плавнее — глобус не успевает за рукой'; out.kind = 'error'; }
         }
-        const edge = h.palm.x < T.EDGE || h.palm.x > 1 - T.EDGE || h.palm.y < T.EDGE || h.palm.y > 1 - T.EDGE;
-        if (edge) { out.hint = 'Рука у края кадра — разожми кулак и перехвати глобус ближе к центру'; out.kind = 'error'; }
-        out.hint ??= 'Держишь глобус — веди кулак, чтобы крутить';
+        this.vel = this.vel.filter(v => now - v.t < 120);
+        const p = hands[key].palm;
+        if (p.x < T.EDGE || p.x > 1 - T.EDGE || p.y < T.EDGE || p.y > 1 - T.EDGE) {
+          out.hint = 'Рука у края кадра — раскрой ладонь и перехвати глобус ближе к центру';
+          out.kind = 'error';
+        }
+        out.hint ??= 'Держишь глобус — веди кулак. Раскрой ладонь — отпустить';
       }
     }
 
-    // Остальные руки: щипок, ладонь, палец.
+    // Масштаб пальцами: свёл большой и указательный — «зацепил», разводишь — ближе.
     for (const [key, h] of list) {
-      const m = moved(key, h);
-      if (h.pose === POSE.PINCH && fists.length < 2) {
-        if (m) act({ type: 'zoom', dz: -m.dy * T.PINCH_ZOOM });
-        out.hint ??= 'Щипок: веди вверх — ближе, вниз — дальше';
-      } else if (h.pose === POSE.PALM && fists.length === 0) {
-        this.palm(h, now, ctx, out, act);
-      } else if (h.pose === POSE.POINT) {
-        out.pointers.push({ key, x: h.tip.x, y: h.tip.y });
-      } else if (h.pose === POSE.OTHER && h.hint && now - this.poseSince[key] > 350) {
+      if (this.grab[key]) continue;
+      if (h.pose === POSE.PINCH && !this.spread[key]) this.spread[key] = { r: h.pinch, idle: now, started: now };
+      const sp = this.spread[key];
+      if (!sp) continue;
+      // Раскрыл ладонь или сжал кулак — «отпустил» масштаб. Палец замер на 2 с — снова указатель.
+      if (h.pose === POSE.PALM || h.pose === POSE.FIST || h.pinch == null || (h.pose === POSE.POINT && now - sp.idle > 2000)) {
+        delete this.spread[key];
+        continue;
+      }
+      const r = sp.r + (h.pinch - sp.r) * 0.5;
+      if (Math.abs(r - sp.r) > T.SPREAD_DEAD) {
+        act({ type: 'zoom', dz: Math.log2(r / sp.r) * T.SPREAD_ZOOM });
+        sp.r = r;
+        sp.idle = now;
+      }
+      if (now - sp.idle > 1500 && now - sp.started > 1500) {
+        out.hint ??= 'Разведи большой и указательный пальцы — глобус приблизится. Раскрой ладонь, чтобы начать заново';
+      } else out.hint ??= 'Разводи пальцы — ближе, своди — дальше. Раскрой ладонь — начать заново';
+    }
+
+    // Остальные руки: ладонь, палец, подсказки.
+    for (const [key, h] of list) {
+      if (this.grab[key] || this.spread[key]) continue;
+      if (h.pose === POSE.PALM && grabbers.length === 0) this.palmGesture(h, now, ctx, out, act);
+      else if (h.pose === POSE.POINT) out.pointers.push({ key, x: h.tip.x, y: h.tip.y });
+      else if (h.pose === POSE.OTHER && h.hint && now - this.poseSince[key] > 350) {
         out.hint ??= h.near === POSE.FIST ? 'Сожми кулак плотнее, чтобы схватить глобус' : h.hint;
         out.kind = 'error';
       }
     }
-    if (!list.some(([, h]) => h.pose === POSE.PALM)) this.swipe = null;
+    if (!list.some(([k, h]) => h.pose === POSE.PALM && !this.grab[k])) this.swipe = null;
 
-    for (const [key, h] of list) this.prev[key] = { x: h.palm.x, y: h.palm.y, t: now };
-    if (!list.length) out.hint = 'Подними руку перед камерой: кулак — крутить, щипок — масштаб';
-    out.hint ??= 'Кулак — крутить · щипок — масштаб · палец — страна · взмах ладонью — режим';
+    if (!list.length) out.hint = 'Подними руку перед камерой: кулак — крутить, пальцы — масштаб';
+    out.hint ??= 'Кулак — крутить · свести и развести пальцы — масштаб · палец — страна · взмах ладонью — режим';
     return out;
   }
 
   // Ладонь: горизонтальный взмах — режим; в режимах с морем — вверх/вниз уровень.
-  palm(h, now, ctx, out, act) {
+  palmGesture(h, now, ctx, out, act) {
     if (now < this.cooldown) return;
     if (!this.swipe || now - this.swipe.t > T.SWIPE_MAX_MS) this.swipe = { x: h.palm.x, y: h.palm.y, t: now, ly: h.palm.y };
     const dx = h.palm.x - this.swipe.x, dy = h.palm.y - this.swipe.y, age = now - this.swipe.t;

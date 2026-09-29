@@ -303,7 +303,7 @@ function drawHud() {
 }
 
 // ---------- главный цикл ----------
-const ROTATE_GAIN = 1.3;
+const ROTATE_GAIN = 2; // небольшое движение руки заметно поворачивает глобус
 let last = performance.now();
 function frame(now) {
   requestAnimationFrame(frame);
@@ -364,7 +364,7 @@ async function startCamera() {
     state.camera = true;
     $('camEmpty').hidden = true;
     $('start').hidden = true;
-    hint('Сожми кулак и веди — глобус крутится. Щипок другой рукой — масштаб', 'info', 3000);
+    hint('Сожми кулак и веди — глобус крутится. Сведи и разведи большой и указательный — масштаб', 'info', 3000);
   } catch (e) {
     console.error(e);
     video.srcObject?.getTracks().forEach(t => t.stop());

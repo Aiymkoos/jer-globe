@@ -18,9 +18,9 @@ const seq = (n, f) => Array.from({ length: n }, (_, i) => f(i));
 
 test('кулак крутит глобус, разжал — инерция', () => {
   const e = new GlobeHands();
-  const r = run(e, [...seq(10, i => ({ Right: h(POSE.FIST, 0.5 + i * 0.01, 0.5), Left: none })), { Right: h(POSE.PALM, 0.6, 0.5), Left: none }]);
+  const r = run(e, [...seq(10, i => ({ Right: h(POSE.FIST, 0.5 + i * 0.01, 0.5), Left: none })), ...seq(2, () => ({ Right: h(POSE.PALM, 0.6, 0.5), Left: none }))]);
   const rot = r.actions.filter(a => a.type === 'rotate');
-  assert.equal(rot.length, 9);
+  assert.ok(rot.length >= 8, String(rot.length));
   assert.ok(rot.every(a => a.dx > 0 && Math.abs(a.dy) < 1e-9));
   const rel = r.actions.find(a => a.type === 'release');
   assert.ok(rel && rel.vx > 0.2, JSON.stringify(rel));
@@ -41,21 +41,60 @@ test('кулак у края кадра — подсказка перехват�
   assert.match(r.last.hint, /края/);
 });
 
-test('щипок вверх приближает, вниз отдаляет', () => {
+test('свёл и развёл большой с указательным — ближе, свёл — дальше', () => {
   const e = new GlobeHands();
-  let r = run(e, seq(6, i => ({ Left: h(POSE.PINCH, 0.3, 0.6 - i * 0.02), Right: none })));
-  const up = r.actions.filter(a => a.type === 'zoom').reduce((s, a) => s + a.dz, 0);
-  assert.ok(up > 0.4, String(up));
-  const e2 = new GlobeHands();
-  r = run(e2, seq(6, i => ({ Left: h(POSE.PINCH, 0.3, 0.4 + i * 0.02), Right: none })));
-  assert.ok(r.actions.filter(a => a.type === 'zoom').reduce((s, a) => s + a.dz, 0) < -0.4);
+  // пальцы сведены (щипок), затем раствор растёт — поза уже «указатель»
+  let r = run(e, [
+    ...seq(3, () => ({ Left: h(POSE.PINCH, 0.3, 0.5, { pinch: 0.22 }), Right: none })),
+    ...seq(10, i => ({ Left: h(POSE.POINT, 0.3, 0.5, { pinch: 0.3 + i * 0.1 }), Right: none })),
+  ]);
+  const zin = r.actions.filter(a => a.type === 'zoom').reduce((s, a) => s + a.dz, 0);
+  assert.ok(zin > 1.5, String(zin));
+  r = run(e, seq(10, i => ({ Left: h(POSE.POINT, 0.3, 0.5, { pinch: 1.2 - i * 0.09 }), Right: none })));
+  assert.ok(r.actions.filter(a => a.type === 'zoom').reduce((s, a) => s + a.dz, 0) < -1);
 });
 
-test('одна рука крутит, другая щипком меняет масштаб — одновременно', () => {
+test('раскрыл ладонь — масштаб «отпущен», можно начать заново без отдаления', () => {
   const e = new GlobeHands();
-  const r = run(e, seq(6, i => ({ Right: h(POSE.FIST, 0.6 + i * 0.01, 0.5), Left: h(POSE.PINCH, 0.3, 0.6 - i * 0.02) })));
+  run(e, [...seq(3, () => ({ Left: h(POSE.PINCH, 0.3, 0.5, { pinch: 0.2 }), Right: none })), ...seq(5, i => ({ Left: h(POSE.POINT, 0.3, 0.5, { pinch: 0.4 + i * 0.15 }), Right: none }))]);
+  const r = run(e, [...seq(3, () => ({ Left: h(POSE.PALM, 0.3, 0.5, { pinch: 1.3 }), Right: none })), ...seq(3, () => ({ Left: h(POSE.PINCH, 0.3, 0.5, { pinch: 0.2 }), Right: none }))]);
+  assert.equal(r.actions.filter(a => a.type === 'zoom').length, 0);
+});
+
+test('пальцы сведены и дрожат — масштаб не прыгает', () => {
+  const e = new GlobeHands();
+  const r = run(e, seq(20, i => ({ Left: h(POSE.PINCH, 0.3, 0.5, { pinch: 0.22 + (i % 2) * 0.012 }), Right: none })));
+  assert.equal(r.actions.filter(a => a.type === 'zoom').length, 0);
+});
+
+test('одна рука крутит, другая пальцами меняет масштаб — одновременно', () => {
+  const e = new GlobeHands();
+  const r = run(e, [
+    ...seq(3, i => ({ Right: h(POSE.FIST, 0.6 + i * 0.01, 0.5), Left: h(POSE.PINCH, 0.3, 0.5, { pinch: 0.2 }) })),
+    ...seq(6, i => ({ Right: h(POSE.FIST, 0.63 + i * 0.01, 0.5), Left: h(POSE.POINT, 0.3, 0.5, { pinch: 0.3 + i * 0.12 }) })),
+  ]);
   assert.ok(r.actions.some(a => a.type === 'rotate'));
   assert.ok(r.actions.some(a => a.type === 'zoom' && a.dz > 0));
+});
+
+test('захват «липкий»: неясная поза на миг не роняет глобус, раскрытая ладонь отпускает', () => {
+  const e = new GlobeHands();
+  const frames = [
+    ...seq(4, i => ({ Right: h(POSE.FIST, 0.5 + i * 0.01, 0.5), Left: none })),
+    ...seq(2, i => ({ Right: h(POSE.OTHER, 0.54 + i * 0.01, 0.5), Left: none })),
+    ...seq(3, i => ({ Right: h(POSE.FIST, 0.56 + i * 0.01, 0.5), Left: none })),
+  ];
+  let r = run(e, frames);
+  assert.ok(!r.actions.some(a => a.type === 'release'));
+  assert.ok(r.actions.filter(a => a.type === 'rotate').length >= 7);
+  r = run(e, seq(3, () => ({ Right: h(POSE.PALM, 0.6, 0.5), Left: none })));
+  assert.ok(r.actions.some(a => a.type === 'release'));
+});
+
+test('дрожание неподвижного кулака не крутит глобус', () => {
+  const e = new GlobeHands();
+  const r = run(e, seq(20, i => ({ Right: h(POSE.FIST, 0.5 + (i % 2) * 0.002, 0.5), Left: none })));
+  assert.equal(r.actions.filter(a => a.type === 'rotate').length, 0);
 });
 
 test('два кулака: развести — приблизить', () => {
