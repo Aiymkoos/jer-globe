@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Жер — планета в твоих руках</title>
+  <meta name="description" content="3D-глобус, которым управляешь руками через веб-камеру: Земля без воды, потоп, ледниковый период, ночные огни, МКС и землетрясения в реальном времени.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="vendor/maplibre/maplibre-gl.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="map"></div>
+  <canvas id="hud"></canvas>
+
+  <header class="top">
+    <div class="brand"><span class="logo" aria-hidden="true"></span><div><b>Жер</b><small>планета в твоих руках</small></div></div>
+    <nav class="modes" id="modes" aria-label="Режимы глобуса"></nav>
+  </header>
+
+  <section class="mode-info" id="modeInfo" hidden><b id="modeName"></b><span id="modeDesc"></span></section>
+
+  <aside class="level" id="level" hidden>
+    <span>Уровень моря</span>
+    <div class="gauge"><i id="levelFill"></i><em id="levelMark"></em></div>
+    <b id="levelValue">+70 м</b>
+    <small>ладонь вверх / вниз</small>
+  </aside>
+
+  <aside class="panel right" id="live" hidden>
+    <h3>МКС сейчас</h3>
+    <p id="issText">Ищу станцию…</p>
+    <h3>Землетрясения за сутки</h3>
+    <ul id="quakeList"><li>Загружаю данные USGS…</li></ul>
+  </aside>
+
+  <aside class="panel right card" id="card" hidden>
+    <div class="card-head"><img id="cardFlag" alt="" onerror="this.hidden=true"><div><b id="cardName"></b><span id="cardCont"></span></div></div>
+    <dl>
+      <dt>Столица</dt><dd id="cardCapital"></dd>
+      <dt>Население</dt><dd id="cardPop"></dd>
+    </dl>
+    <p id="cardWiki"></p>
+  </aside>
+
+  <aside class="panel right quiz" id="quiz" hidden>
+    <span class="eyebrow" id="quizRound">Вопрос 1 из 8</span>
+    <h3>Найди на глобусе</h3>
+    <b class="target" id="quizTarget"></b>
+    <p class="tiny">Поверни глобус кулаком, наведи палец на страну и подержи</p>
+    <div class="quiz-stats"><span>Очки <b id="quizScore">0</b></span><span>Серия <b id="quizStreak">0</b></span></div>
+    <div id="quizResult"></div>
+  </aside>
+
+  <div class="camera" id="camera">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="handCanvas"></canvas>
+    <div class="cam-empty" id="camEmpty">Камера выключена</div>
+    <div class="cam-state"><span id="stateLeft">левая: —</span><span id="stateRight">правая: —</span></div>
+  </div>
+
+  <div class="hint" id="hint" role="status" aria-live="polite">Загрузка глобуса…</div>
+
+  <div class="start" id="start">
+    <div class="start-card">
+      <span class="eyebrow">3D-глобус · жесты · веб-камера</span>
+      <h1>Жер</h1>
+      <p class="lead">Возьми планету в руки: крути её кулаком, приближай щипком до улиц своего города, осуши океаны, подними уровень моря и найди МКС прямо сейчас.</p>
+      <ul class="gest">
+        <li><b>✊ Кулак</b> — схватить и крутить глобус</li>
+        <li><b>🤏 Щипок</b> другой рукой — вверх ближе, вниз дальше</li>
+        <li><b>☝ Палец</b> на страну — узнать о ней</li>
+        <li><b>✋ Взмах ладонью</b> — сменить режим</li>
+      </ul>
+      <div class="actions">
+        <button class="primary" id="camStart">Начать с камерой</button>
+        <button class="ghost" id="mouseStart">Без камеры — мышью</button>
+      </div>
+      <div class="meter"><i id="loadBar"></i></div>
+      <p class="tiny" id="loadText">Загружаю распознавание рук…</p>
+      <p class="tiny">Видео обрабатывается прямо в браузере и никуда не отправляется.</p>
+    </div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
