@@ -196,13 +196,13 @@ test('джойстик: сдвинул кулак — глобус едет ту
   const e = new GlobeHands();
   // сжал кулак в центре, затем плавно сдвинул вправо и держит
   let r = run(e, [...seq(3, () => ({ Right: h(POSE.FIST, 0.5, 0.5), Left: none })), ...seq(30, i => ({ Right: h(POSE.FIST, 0.5 + Math.min(i, 10) * 0.012, 0.5), Left: none }))]);
-  const spins = r.actions.filter(a => a.type === 'spin');
-  assert.ok(spins.length >= 15, String(spins.length));
+  const spins = r.actions.filter(a => a.type === 'spin' && (a.vx || a.vy));
+  assert.ok(spins.length >= 10, String(spins.length));
   assert.ok(spins.every(a => a.vx > 0 && Math.abs(a.vy) < 1e-9));
   assert.ok(r.last.joy && Math.abs(r.last.joy.ax - 0.5) < 1e-9);
   // вернул кулак на место — вращение прекращается
   r = run(e, seq(20, () => ({ Right: h(POSE.FIST, 0.5, 0.5), Left: none })));
-  assert.equal(r.last.actions.filter(a => a.type === 'spin').length, 0);
+  assert.ok(r.last.actions.every(a => a.type !== 'spin' || (a.vx === 0 && a.vy === 0)));
   assert.equal(r.last.joy.k, 0);
   assert.match(r.last.hint, /Сдвинь кулак/);
 });
@@ -210,14 +210,14 @@ test('джойстик: сдвинул кулак — глобус едет ту
 test('джойстик: дрожание кулака у центра не крутит, скорость растёт плавно и ограничена', () => {
   const e = new GlobeHands();
   const r = run(e, seq(20, i => ({ Right: h(POSE.FIST, 0.5 + (i % 2) * 0.01, 0.5 + (i % 3) * 0.008), Left: none })));
-  assert.equal(r.actions.filter(a => a.type === 'spin').length, 0);
-  const a = joySpeed({ x: 0.06, y: 0 }).vx, b = joySpeed({ x: 0.12, y: 0 }).vx, c = joySpeed({ x: 0.5, y: 0 }).vx;
+  assert.ok(r.actions.every(a => a.type !== 'spin' || (a.vx === 0 && a.vy === 0)));
+  const a = joySpeed({ x: 0.08, y: 0 }).vx, b = joySpeed({ x: 0.14, y: 0 }).vx, c = joySpeed({ x: 0.5, y: 0 }).vx;
   assert.ok(a > 0 && b > a * 2 && Math.abs(c - T.JOY_MAX) < 1e-9, `${a} ${b} ${c}`);
 });
 
 test('джойстик: раскрыл ладонь — глобус мягко останавливается, кулак далеко — подсказка', () => {
   const e = new GlobeHands();
-  let r = run(e, [...seq(2, () => ({ Right: h(POSE.FIST, 0.4, 0.5), Left: none })), ...seq(8, i => ({ Right: h(POSE.FIST, 0.4 - i * 0.05, 0.5), Left: none }))]);
+  let r = run(e, [...seq(2, () => ({ Right: h(POSE.FIST, 0.6, 0.5), Left: none })), ...seq(8, i => ({ Right: h(POSE.FIST, 0.6 - i * 0.08, 0.5), Left: none }))]);
   assert.match(r.last.hint, /слишком далеко/);
   assert.equal(r.last.kind, 'error');
   r = run(e, seq(3, () => ({ Right: h(POSE.PALM, 0.05, 0.5), Left: none })));

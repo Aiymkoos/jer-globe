@@ -24,9 +24,9 @@ export const T = {
   LEVEL_GAIN: 260,    // метров уровня моря на всю высоту кадра
   CLOSE_HANDS: 0.12,  // руки ближе — масштаб двумя руками неточный
   RELEASE_FRAMES: 2,  // столько кадров раскрытой руки — глобус отпущен
-  JOY_DEAD: 0.035,    // джойстик: сдвиг кулака меньше — глобус стоит
-  JOY_RANGE: 0.16,    // сдвиг, при котором скорость максимальна
-  JOY_MAX: 0.9,       // максимальная скорость, долей экрана в секунду
+  JOY_DEAD: 0.045,    // джойстик: сдвиг кулака меньше — глобус стоит
+  JOY_RANGE: 0.22,    // сдвиг, при котором скорость максимальна
+  JOY_MAX: 0.45,      // максимальная скорость, долей экрана в секунду
 };
 
 // Скорость джойстика: мягкий старт у центра, точное управление малыми сдвигами.
@@ -34,7 +34,7 @@ export function joySpeed(off) {
   const d = Math.hypot(off.x, off.y);
   if (d <= T.JOY_DEAD) return { vx: 0, vy: 0, k: 0 };
   const k = Math.min(1, (d - T.JOY_DEAD) / (T.JOY_RANGE - T.JOY_DEAD));
-  const v = T.JOY_MAX * k ** 1.6;
+  const v = T.JOY_MAX * k ** 1.8;
   return { vx: (off.x / d) * v, vy: (off.y / d) * v, k };
 }
 
@@ -146,7 +146,7 @@ export class GlobeHands {
         const off = { x: p.x - g.ax, y: p.y - g.ay };
         const s = joySpeed(off);
         this.spin = { vx: s.vx, vy: s.vy };
-        if (s.k > 0) act({ type: 'spin', vx: s.vx, vy: s.vy });
+        act({ type: 'spin', vx: s.vx, vy: s.vy });
         out.joy = { key, ax: g.ax, ay: g.ay, x: p.x, y: p.y, k: s.k };
         const d = Math.hypot(off.x, off.y);
         if (d > T.JOY_RANGE * 1.8) {

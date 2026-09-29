@@ -336,6 +336,7 @@ function drawHud() {
 // ---------- главный цикл ----------
 const ROTATE_GAIN = 2; // небольшое движение руки заметно поворачивает глобус
 let last = performance.now();
+let spinTarget = null, spin = { vx: 0, vy: 0 };
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000);
@@ -350,9 +351,12 @@ function frame(now) {
     if (hands) {
       const out = engine.update(hands, now, { levelMode: ['flood', 'iceage'].includes(state.mode) });
       for (const a of out.actions) {
-        if (a.type === 'spin') { state.inertia = null; map.panBy([-a.vx * dt * innerWidth * ROTATE_GAIN, -a.vy * dt * innerHeight * ROTATE_GAIN], { duration: 0 }); }
+        if (a.type === 'spin') { state.inertia = null; spinTarget = { vx: a.vx, vy: a.vy, t: now }; }
         else if (a.type === 'rotate') { state.inertia = null; map.panBy([-a.dx * innerWidth * ROTATE_GAIN, -a.dy * innerHeight * ROTATE_GAIN], { duration: 0 }); }
-        else if (a.type === 'release') state.inertia = { vx: a.vx, vy: a.vy };
+        else if (a.type === 'release') {
+          if (engine.style === 'joystick') spinTarget = null; // джойстик: скорость плавно гаснет сама
+          else state.inertia = { vx: a.vx, vy: a.vy };
+        }
         else if (a.type === 'zoom') {
           const z = map.getZoom() + a.dz;
           if (z > map.getMaxZoom() && a.dz > 0) hint('Ближе уже некуда — это максимальное приближение', 'error', 1200);
@@ -366,6 +370,15 @@ function frame(now) {
       hint(out.hint, out.kind);
     }
   }
+
+  // Джойстик: скорость задаёт рука, а крутим каждый кадр экрана (60 раз в секунду),
+  // а не только когда пришёл кадр камеры, — поэтому без рывков. Скорость меняется плавно.
+  if (spinTarget && now - spinTarget.t > 300) spinTarget = null; // рука пропала — стоп
+  const tv = spinTarget ?? { vx: 0, vy: 0 };
+  const ease = 1 - Math.exp(-dt / 0.12);
+  spin.vx += (tv.vx - spin.vx) * ease; spin.vy += (tv.vy - spin.vy) * ease;
+  if (Math.hypot(spin.vx, spin.vy) > 0.002) map.panBy([-spin.vx * dt * innerWidth * ROTATE_GAIN, -spin.vy * dt * innerHeight * ROTATE_GAIN], { duration: 0 });
+  else if (!spinTarget) spin.vx = spin.vy = 0;
 
   // Отпущенный глобус крутится дальше и плавно останавливается.
   if (state.inertia) {
