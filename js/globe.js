@@ -125,7 +125,7 @@ export async function createGlobe(container, { mode = 'satellite', level, center
   // ошибки стиля и загрузки видны сразу, а не теряются до события load
   map.on('error', e => (globalThis.__globeErrors ??= []).push(String(e.error?.message ?? e.message ?? e)));
   await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { map.remove(); reject(new Error('Globe loading timeout')); }, 30000);
+    const timer = setTimeout(() => { map.remove(); reject(new Error('Globe loading timeout')); }, 90000);
     map.once('load', () => { clearTimeout(timer); resolve(); });
   });
   return { map, countries, maplibregl };

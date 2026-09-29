@@ -7,7 +7,7 @@
   <meta name="description" content="3D-глобус, которым управляешь руками через веб-камеру: Земля без воды, потоп, ледниковый период, ночные огни, МКС и землетрясения в реальном времени.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@300;500;700;800&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="vendor/maplibre/maplibre-gl.css">
   <link rel="stylesheet" href="css/style.css">
 </head>
@@ -79,32 +79,32 @@
   <div class="hint" id="hint" role="status" aria-live="polite">Загрузка глобуса…</div>
 
   <div class="start" id="start">
+    <div class="start-bg" aria-hidden="true"></div>
+    <div class="start-stars" aria-hidden="true"></div>
+    <div class="start-halo" aria-hidden="true"></div>
+    <div class="start-globe" aria-hidden="true"></div>
     <div class="start-card">
       <div class="intro-main">
-        <span class="eyebrow">Интерактивный атлас · 01</span>
-        <h1>Земля.<br><em>Ближе.</em></h1>
-        <p class="lead">От океанских глубин до огней городов.<br>Исследуй планету движением руки.</p>
-        <div class="atlas-mark" aria-hidden="true">
-          <svg viewBox="0 0 300 140" fill="none"><g stroke="currentColor" stroke-width=".7"><ellipse cx="150" cy="70" rx="128" ry="62"/><ellipse cx="150" cy="70" rx="78" ry="62"/><ellipse cx="150" cy="70" rx="28" ry="62"/><path d="M22 70h256M39 39h222M39 101h222M150 8v124"/></g><circle cx="193" cy="44" r="3" fill="currentColor"/></svg>
-          <span>43°15′ N &nbsp; 76°57′ E</span>
-        </div>
+        <span class="kick">3D-глобус · жесты · веб-камера</span>
+        <h1>ЖЕР</h1>
+        <p class="sub">Планета <em>в твоих руках</em></p>
+        <p class="lead">Крути Землю кулаком, приближай двумя ладонями до улиц своего города, осуши океаны, подними уровень моря и найди МКС прямо сейчас. Без мыши и без установки.</p>
         <div class="actions">
-          <button class="primary" id="camStart" disabled>Исследовать с камерой <span aria-hidden="true">↗</span></button>
-          <button class="ghost" id="mouseStart" disabled>Открыть мышью</button>
+          <button class="primary" id="camStart" disabled>Начать с камерой</button>
+          <button class="ghost" id="mouseStart" disabled>Без камеры — мышью</button>
         </div>
-        <p class="tiny privacy">Камера видит движения. Видео остаётся на твоём устройстве.</p>
+        <p class="tiny privacy">Видео обрабатывается прямо в браузере и никуда не отправляется.</p>
       </div>
       <div class="intro-guide">
-        <span class="eyebrow">Начни с одного жеста</span>
-        <ol class="gesture-guide">
-          <li><b>Сожми и потяни</b><span>Кулак поворачивает глобус вслед за рукой. Раскрой ладонь — он остановится.</span></li>
-          <li><b>Приблизь детали</b><span>Покажи две раскрытые ладони и разведи руки в стороны.</span></li>
-          <li><b>Выбери страну</b><span>Наведи указательный палец и задержи его на месте.</span></li>
-        </ol>
-        <p class="intro-note">Остальные жесты и настройка скорости — в разделе «Управление».</p>
+        <div class="gcards">
+          <div class="gcard"><i>✊</i><b>Кулак</b><span>Сожми и потяни — глобус едет за рукой. Раскрой ладонь — стоп.</span></div>
+          <div class="gcard"><i>🙌</i><b>Две ладони</b><span>Разведи руки — ближе, сведи — дальше.</span></div>
+          <div class="gcard"><i>☝</i><b>Палец</b><span>Задержи на стране — флаг, столица, справка.</span></div>
+          <div class="gcard"><i>✋</i><b>Взмах ладонью</b><span>Подержи ладонь, затем проведи в сторону — другой режим.</span></div>
+        </div>
         <div class="load-status"><p id="mapStatus" role="status">Подготавливаем глобус…</p><button class="ghost" id="retryMap" hidden>Повторить загрузку</button>
-        <div class="meter"><i id="loadBar"></i></div>
-        <p class="tiny" id="loadText">Готовим распознавание рук…</p></div>
+          <div class="meter"><i id="loadBar"></i></div>
+          <p class="tiny" id="loadText">Готовим распознавание рук…</p></div>
       </div>
     </div>
   </div>
